@@ -165,7 +165,7 @@ Camera ReadCamera(const std::string &cam_path)
     float depth_num;
     float interval;
     file >> camera.depth_min >> interval >> depth_num >> camera.depth_max;
-
+//    std::cout << camera.depth_min << " " << interval << " " << depth_num  << " "<< camera.depth_max << "\n";
     return camera;
 }
 
@@ -454,11 +454,11 @@ void ACMMP::SetPlanarPriorParams()
     params.planar_prior = true;
 }
 
-void ACMMP::InuputInitialization(const std::string &dense_folder, const std::vector<Problem> &problems, const int idx)
+void ACMMP::InputInitialization(const std::string &dense_folder, const std::vector<Problem> &problem, const int idx)
 {
     images.clear();
     cameras.clear();
-    const Problem problem = problems[idx];
+    const Problem problem = problem[idx];
 
     std::string image_folder = dense_folder + std::string("/images");
     std::string cam_folder = dense_folder + std::string("/cams");
@@ -493,10 +493,10 @@ void ACMMP::InuputInitialization(const std::string &dense_folder, const std::vec
     }
 
     // Scale cameras and images
-    int max_image_size = problems[idx].cur_image_size;
+    int max_image_size = problem[idx].cur_image_size;
     for (size_t i = 0; i < images.size(); ++i) {
         if (i > 0) {
-            max_image_size = problems[problem.src_image_ids[i - 1]].cur_image_size;
+            max_image_size = problem[problem.src_image_ids[i - 1]].cur_image_size;
         }
 
         if (images[i].cols <= max_image_size && images[i].rows <= max_image_size) {
@@ -527,7 +527,7 @@ void ACMMP::InuputInitialization(const std::string &dense_folder, const std::vec
 
     params.depth_min = cameras[0].depth_min * 0.6f;
     params.depth_max = cameras[0].depth_max * 1.2f;
-    std::cout << "depthe range: " << params.depth_min << " " << params.depth_max << std::endl;
+    std::cout << "depth range: " << params.depth_min << " " << params.depth_max << std::endl;
     params.num_images = (int)images.size();
     std::cout << "num images: " << params.num_images << std::endl;
     params.disparity_min = cameras[0].K[0] * params.baseline / params.depth_max;

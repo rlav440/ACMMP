@@ -530,6 +530,9 @@ __device__ float ComputeGeomConsistencyCost(const cudaTextureObject_t depth_imag
     const float diff_row = p.y - backward_point.y;
     return min(max_cost, sqrt(diff_col * diff_col + diff_row * diff_row));
 }
+//TODO add a new params set:
+// need to add a new param state: seeded | Done
+// then need to load the initial values to the object
 
 __global__ void RandomInitialization(cudaTextureObjects *texture_objects, Camera *cameras, float4 *plane_hypotheses,  float4 *scaled_plane_hypotheses, float *costs,  float *pre_costs,  curandState *rand_states, unsigned int *selected_views, float4 *prior_planes, unsigned int *plane_masks, const PatchMatchParams params)
 {
@@ -545,8 +548,15 @@ __global__ void RandomInitialization(cudaTextureObjects *texture_objects, Camera
     curand_init(clock64(), p.y, p.x, &rand_states[center]);
 
     if (!params.geom_consistency && !params.hierarchy ) {
-        plane_hypotheses[center] = GenerateRandomPlaneHypothesis(cameras[0], p, &rand_states[center], params.depth_min, params.depth_max);
-        costs[center] = ComputeMultiViewInitialCostandSelectedViews(texture_objects[0].images, cameras, p, plane_hypotheses[center], &selected_views[center], params);
+        if (!params.seeded)
+            plane_hypotheses[center] = GenerateRandomPlaneHypothesis(
+                    cameras[0], p, &rand_states[center], params.depth_min, params.depth_max
+                    );
+        else
+            plane_hypotheses[center] = prior_planes[center]; // Neat trick, can just pull in prior plane, make earlier.
+        costs[center] = ComputeMultiViewInitialCostandSelectedViews(
+                texture_objects[0].images, cameras, p, plane_hypotheses[center], &selected_views[center], params
+                );
     }
     else if (params.planar_prior) {
         if (plane_masks[center] > 0 && costs[center] >= 0.1f) {

@@ -70,7 +70,10 @@ int ComputeMultiScaleSettings(const std::string &dense_folder, std::vector<Probl
     return max_num_downscale;
 }
 
-void ProcessProblem(const std::string &dense_folder, const std::vector<Problem> &problems, const int idx, bool geom_consistency, bool planar_prior, bool hierarchy, bool multi_geometrty=false)
+void ProcessProblem(
+        const std::string &dense_folder, const std::vector<Problem> &problems, const int idx,
+        bool geom_consistency, bool planar_prior, bool hierarchy, bool multi_geometry=false, bool seeded=false
+                )
 {
     const Problem problem = problems[idx];
     std::cout << "Processing image " << std::setw(8) << std::setfill('0') << problem.ref_image_id << "..." << std::endl;
@@ -80,15 +83,15 @@ void ProcessProblem(const std::string &dense_folder, const std::vector<Problem> 
     std::string result_folder = result_path.str();
     mkdir(result_folder.c_str(), 0777);
 
-    ACMMP acmmp;
+    ACMMP acmmp; // here we initialise an acmmp handler: it's a single instance object
     if (geom_consistency) {
-        acmmp.SetGeomConsistencyParams(multi_geometrty);
+        acmmp.SetGeomConsistencyParams(multi_geometry);
     }
     if (hierarchy) {
         acmmp.SetHierarchyParams();
     }
 
-    acmmp.InuputInitialization(dense_folder, problems, idx);
+    acmmp.InputInitialization(dense_folder, problems, idx);
 
     acmmp.CudaSpaceInitialization(dense_folder, problem);
     acmmp.RunPatchMatch();
@@ -389,6 +392,13 @@ void RunFusion(std::string &dense_folder, const std::vector<Problem> &problems, 
     StoreColorPlyFileBinaryPointCloud (ply_path, PointCloud);
 }
 
+bool FindInputSeeds(std::string &dense_folder, std::vector<std::string> &seed_images){
+    // look for a seed folder to see if it exists
+    return false;
+    // if the seed folder exists, provide a vector of strings to all the seeds
+    return true;
+}
+
 int main(int argc, char** argv)
 {
     if (argc < 2) {
@@ -398,10 +408,14 @@ int main(int argc, char** argv)
 
     std::string dense_folder = argv[1];
     std::vector<Problem> problems;
+    std::vector<std::string> seed_images;
     GenerateSampleList(dense_folder, problems);
+    bool seeded = FindInputSeeds(dense_folder, seed_images);
 
     std::string output_folder = dense_folder + std::string("/ACMMP");
     mkdir(output_folder.c_str(), 0777);
+
+    float4 * plane_data = nullptr;
 
     size_t num_images = problems.size();
     std::cout << "There are " << num_images << " problems needed to be processed!" << std::endl;
@@ -414,6 +428,7 @@ int main(int argc, char** argv)
      bool planar_prior = false;
      bool hierarchy = false;
      bool multi_geometry = false;
+
      while (max_num_downscale >= 0) {
         std::cout << "Scale: " << max_num_downscale << std::endl;
 
@@ -428,8 +443,20 @@ int main(int argc, char** argv)
             flag = 1;
             geom_consistency = false;
             planar_prior = true;
+
+
+            //Todo, check if a seeded input was found
+            seeded = false;
+
+
+
             for (size_t i = 0; i < num_images; ++i) {
-                ProcessProblem(dense_folder, problems, i, geom_consistency, planar_prior, hierarchy);
+                //if seeded, run ingest, and load the data to the pointer.
+
+
+                ProcessProblem(
+                        dense_folder, problems, i, geom_consistency, planar_prior, hierarchy, multi_geometry, seeded
+                        );
             }
             geom_consistency = true;
             planar_prior = false;

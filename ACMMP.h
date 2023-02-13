@@ -50,6 +50,7 @@ struct PatchMatchParams {
     bool multi_geometry = false;
     bool hierarchy = false;
     bool upsample = false;
+    bool seeded = false;
 };
 
 class ACMMP {
@@ -57,7 +58,7 @@ public:
     ACMMP();
     ~ACMMP();
 
-    void InuputInitialization(const std::string &dense_folder, const std::vector<Problem> &problem, const int idx);
+    void InputInitialization(const std::string &dense_folder, const std::vector<Problem> &problem, const int idx);
     void Colmap2MVS(const std::string &dense_folder, std::vector<Problem> &problems);
     void CudaSpaceInitialization(const std::string &dense_folder, const Problem &problem);
     void RunPatchMatch();

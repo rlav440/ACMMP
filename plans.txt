@@ -1,0 +1,49 @@
+
+Theory for improvements:
+
+What this paper demonstrates:
+Good reconstructions are enabled by two areas.
+## Raw reconstruction ##
+- Smartly using low resolution reconstructions; upsampling, and consistency conditions to propagate surfaces from areas.
+- Using geometric consistency between views to constrain the priors.
+
+## introduction of good defaults ##
+- In many cases, good defaults are much easier to calculate.
+- Probablistic integration of these priors: requiring strong signals to materially deviate from these beliefs.
+
+What can potentially be done.
+
+Fundamentally, I propose working on some kind of modelled probability volume.
+
+In the case of a single ray: this probability volume presents a modelled cost prior.
+
+## that is: we have
+We can update this prior with the evidence from each ray intersection at increasing resolutions.
+
+## at this stage, we have multiple potential sources of info:
+# cost and derivative for local planes
+    At the plane update stage, when other permutations are tried, this information can be captured
+# planar priors over the object surface
+
+
+What is the form of the probability distribution?
+#probability of intersection, probability of normal.
+
+# how does this integrate with the hierachichal approach?
+# at every step,
+ 1. We sample the existing distribution over the object.
+ 2. We run a reconstruction starting from this sample, recovering the raw + triangulation
+ 3. We update the central distribution with this information.
+ 4. Optionally, we run a biased reconstruction over this plane. (does this tell us anything - )
+#finally
+ 5. We run a final reconstruction at the maximum resolution, which enables the recovery of this eventual information.
+
+
+This neatly achieves the unification of geometric consistency between views, and geometric unification of the mvs.
+
+The outstanding question is how this probability space is modelled to a high enough resolution to enable reconstruction
+at very very high resolutions.
+# maybe there is an idea here to have a lower resolution internal probability mesh, then the final depth maps are
+able to operate at a higher resolution than the underlying map.
+
+
