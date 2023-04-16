@@ -2,6 +2,9 @@
 
 #include <cstdarg>
 
+
+//#define DEBUG
+
 void StringAppendV(std::string* dst, const char* format, va_list ap) {
   // First try with a small fixed size buffer.
   static const int kFixedBufferSize = 1024;
@@ -96,6 +99,11 @@ void CudaCheckError(const char* file, const int line) {
   }
 }
 
+void checkGPUim(float4 * gpu_mem, Camera cam){
+
+    // grab the resolution
+}
+
 ACMMP::ACMMP() {}
 
 ACMMP::~ACMMP()
@@ -115,6 +123,7 @@ ACMMP::~ACMMP()
     cudaFree(rand_states_cuda);
     cudaFree(selected_views_cuda);
     cudaFree(depths_cuda);
+    cudaFree(sample_prior_cuda);
 
     if (params.geom_consistency) {
         for (int i = 0; i < num_images; ++i) {
@@ -454,38 +463,100 @@ void ACMMP::SetPlanarPriorParams()
     params.planar_prior = true;
 }
 
-void ACMMP::InputInitialization(const std::string &dense_folder, const std::vector<Problem> &problem, const int idx)
+
+float computeDepthfromPlaneHypothesis(const Camera camera, const float4
+plane_hypothesis, const int2 p)
+{
+    return -plane_hypothesis.w * camera.K[0] / (
+            (p.x - camera.K[2]) * plane_hypothesis.x +
+            (camera.K[0] / camera.K[4]) * (p.y - camera.K[5]) * plane_hypothesis.y +
+            camera.K[0] * plane_hypothesis.z);
+}
+
+void ACMMP::SetPlanarPrior(std::unique_ptr<float4> prior) {
+    const int width = cameras[0].width;
+    const int height = cameras[0].height;
+
+    std::cout << "Allocated image with " << height << " " << width << std::endl;
+    const size_t copy_size = width * height * sizeof(float4);
+    cudaMalloc(&sample_prior_cuda, copy_size);
+    cudaMemcpy(sample_prior_cuda, prior.get(), copy_size, cudaMemcpyHostToDevice);
+    params.seeded = true;
+
+#ifdef DEBUG
+    auto *on_gpu = new float4[width*height];
+    cudaMemcpy(on_gpu, sample_prior_cuda, copy_size, cudaMemcpyDeviceToHost);
+    int k;
+
+    cv::Mat_<float> depth_display = cv::Mat::zeros(height, width, CV_32F);
+    // so: how do we solve this issue.
+    // we see that x is associated with width (cols)
+    // secondly, y is associated with height (rows)
+    // this indicates that (j,i) is correct.
+
+    // but we now find an equal distance for everything.
+    // so we must do
+    // m a t h s
+
+    for (int i = 0; i < height; ++i) {
+        for (int j = 0; j < width; ++j) {
+            k = i * width + j;
+
+            float depth = computeDepthfromPlaneHypothesis(
+                    cameras[0],
+                    on_gpu[k],
+                    make_int2(j,i)
+            );
+            depth_display(i,j) = depth;
+            if((i%100 == 0) && (j%100 == 0)){
+                std::cout << "depth value: " << depth << std::endl;
+            }
+        }
+    }
+
+    cv::Mat depths_vis;
+    depth_display.convertTo(depths_vis, CV_8U, 255.f/800);
+
+    cv::imshow("unloaded depth", depths_vis);
+    cv::waitKey(-1);
+#endif
+}
+
+void ACMMP::InputInitialization(
+        const std::string &dense_folder,
+        const std::string &output_folder,
+        const std::vector<Problem> &problem, const int idx)
 {
     images.clear();
     cameras.clear();
-    const Problem problem = problem[idx];
+    const Problem& local_problem = problem[idx];
 
     std::string image_folder = dense_folder + std::string("/images");
     std::string cam_folder = dense_folder + std::string("/cams");
 
     std::stringstream image_path;
-    image_path << image_folder << "/" << std::setw(8) << std::setfill('0') << problem.ref_image_id << ".jpg";
+    image_path << image_folder << "/" << std::setw(8) << std::setfill('0') << local_problem.ref_image_id << ".jpg";
     cv::Mat_<uint8_t> image_uint = cv::imread(image_path.str(), cv::IMREAD_GRAYSCALE);
     cv::Mat image_float;
     image_uint.convertTo(image_float, CV_32FC1);
     images.push_back(image_float);
     std::stringstream cam_path;
-    cam_path << cam_folder << "/" << std::setw(8) << std::setfill('0') << problem.ref_image_id << "_cam.txt";
+    cam_path << cam_folder << "/" << std::setw(8) << std::setfill('0') << local_problem.ref_image_id << "_cam.txt";
     Camera camera = ReadCamera(cam_path.str());
     camera.height = image_float.rows;
     camera.width = image_float.cols;
     cameras.push_back(camera);
 
-    size_t num_src_images = problem.src_image_ids.size();
+    size_t num_src_images = local_problem.src_image_ids.size();
     for (size_t i = 0; i < num_src_images; ++i) {
         std::stringstream image_path;
-        image_path << image_folder << "/" << std::setw(8) << std::setfill('0') << problem.src_image_ids[i] << ".jpg";
+        image_path << image_folder << "/" << std::setw(8) << std::setfill('0') << local_problem.src_image_ids[i] << ".jpg";
         cv::Mat_<uint8_t> image_uint = cv::imread(image_path.str(), cv::IMREAD_GRAYSCALE);
         cv::Mat image_float;
         image_uint.convertTo(image_float, CV_32FC1);
         images.push_back(image_float);
         std::stringstream cam_path;
-        cam_path << cam_folder << "/" << std::setw(8) << std::setfill('0') << problem.src_image_ids[i] << "_cam.txt";
+        cam_path << cam_folder << "/" << std::setw(8) << std::setfill('0') << local_problem.src_image_ids[i] << "_cam.txt";
         Camera camera = ReadCamera(cam_path.str());
         camera.height = image_float.rows;
         camera.width = image_float.cols;
@@ -493,11 +564,12 @@ void ACMMP::InputInitialization(const std::string &dense_folder, const std::vect
     }
 
     // Scale cameras and images
-    int max_image_size = problem[idx].cur_image_size;
+    int max_image_size = local_problem.cur_image_size;
     for (size_t i = 0; i < images.size(); ++i) {
         if (i > 0) {
-            max_image_size = problem[problem.src_image_ids[i - 1]].cur_image_size;
+            max_image_size = problem[local_problem.src_image_ids[i - 1]].cur_image_size;
         }
+//        std::cout << "Max image size of " << max_image_size << std::endl;
 
         if (images[i].cols <= max_image_size && images[i].rows <= max_image_size) {
             continue;
@@ -537,7 +609,8 @@ void ACMMP::InputInitialization(const std::string &dense_folder, const std::vect
         depths.clear();
 
         std::stringstream result_path;
-        result_path << dense_folder << "/ACMMP" << "/2333_" << std::setw(8) << std::setfill('0') << problem.ref_image_id;
+        result_path << output_folder << "/2333_" << std::setw(8) << std::setfill('0') <<
+        local_problem.ref_image_id;
         std::string result_folder = result_path.str();
         std::string suffix = "/depths.dmb";
         if (params.multi_geometry) {
@@ -548,10 +621,11 @@ void ACMMP::InputInitialization(const std::string &dense_folder, const std::vect
         readDepthDmb(depth_path, ref_depth);
         depths.push_back(ref_depth);
 
-        size_t num_src_images = problem.src_image_ids.size();
+        size_t num_src_images = local_problem.src_image_ids.size();
         for (size_t i = 0; i < num_src_images; ++i) {
             std::stringstream result_path;
-            result_path << dense_folder << "/ACMMP" << "/2333_" << std::setw(8) << std::setfill('0') << problem.src_image_ids[i];
+            result_path << output_folder << "/2333_" << std::setw(8) << std::setfill('0')
+            << local_problem.src_image_ids[i];
             std::string result_folder = result_path.str();
             std::string depth_path = result_folder + suffix;
             cv::Mat_<float> depth;
@@ -561,7 +635,7 @@ void ACMMP::InputInitialization(const std::string &dense_folder, const std::vect
     }
 }
 
-void ACMMP::CudaSpaceInitialization(const std::string &dense_folder, const Problem &problem)
+void ACMMP::CudaSpaceInitialization(const std::string &output_folder, const Problem &problem)
 {
     num_images = (int)images.size();
 
@@ -634,7 +708,7 @@ void ACMMP::CudaSpaceInitialization(const std::string &dense_folder, const Probl
         cudaMemcpy(texture_depths_cuda, &texture_depths_host, sizeof(cudaTextureObjects), cudaMemcpyHostToDevice);
 
         std::stringstream result_path;
-        result_path << dense_folder << "/ACMMP" << "/2333_" << std::setw(8) << std::setfill('0') << problem.ref_image_id;
+        result_path << output_folder << "/2333_" << std::setw(8) << std::setfill('0') << problem.ref_image_id;
         std::string result_folder = result_path.str();
         std::string suffix = "/depths.dmb";
         if (params.multi_geometry) {
@@ -670,7 +744,8 @@ void ACMMP::CudaSpaceInitialization(const std::string &dense_folder, const Probl
 
     if (params.hierarchy) {
         std::stringstream result_path;
-        result_path << dense_folder << "/ACMMP" << "/2333_" << std::setw(8) << std::setfill('0') << problem.ref_image_id;
+        result_path << output_folder << "/2333_" << std::setw(8) << std::setfill('0')
+        << problem.ref_image_id;
         std::string result_folder = result_path.str();
         std::string depth_path = result_folder + "/depths.dmb";
         std::string normal_path = result_folder + "/normals.dmb";
@@ -696,6 +771,9 @@ void ACMMP::CudaSpaceInitialization(const std::string &dense_folder, const Probl
         else {
             params.upsample = false;
         }
+
+
+
         for (int col = 0; col < width; ++col) {
             for (int row = 0; row < height; ++row) {
                 int center = row * width + col;
@@ -712,6 +790,9 @@ void ACMMP::CudaSpaceInitialization(const std::string &dense_folder, const Probl
                 scaled_plane_hypotheses_host[center] = plane_hypothesis;
             }
         }
+
+//        cv::imshow("upsampling test", ref_normal);
+//        cv::waitKey(-1);
 
         for (int col = 0; col < cameras[0].width; ++col) {
             for (int row = 0; row < cameras[0].height; ++row) {
@@ -876,7 +957,11 @@ float ACMMP::GetDepthFromPlaneParam(const float4 plane_hypothesis, const int x, 
     return -plane_hypothesis.w * cameras[0].K[0] / ((x - cameras[0].K[2]) * plane_hypothesis.x + (cameras[0].K[0] / cameras[0].K[4]) * (y - cameras[0].K[5]) * plane_hypothesis.y + cameras[0].K[0] * plane_hypothesis.z);
 }
 
- void JBUAddImageToTextureFloatGray ( std::vector<cv::Mat_<float>>  &imgs, cudaTextureObject_t texs[], cudaArray *cuArray[], const int &numSelViews)
+Camera ACMMP::GetCamera(const int index){
+    return cameras[index];
+}
+
+void JBUAddImageToTextureFloatGray ( std::vector<cv::Mat_<float>>  &imgs, cudaTextureObject_t texs[], cudaArray *cuArray[], const int &numSelViews)
 {
     for (int i=0; i<numSelViews; i++) {
         int index = i;
@@ -934,7 +1019,11 @@ float ACMMP::GetDepthFromPlaneParam(const float4 plane_hypothesis, const int x, 
      cudaDeviceSynchronize();
  }
 
-void RunJBU(const cv::Mat_<float>  &scaled_image_float, const cv::Mat_<float> &src_depthmap, const std::string &dense_folder , const Problem &problem)
+void RunJBU(const cv::Mat_<float>
+        &scaled_image_float, const cv::Mat_<float> &src_depthmap,
+        const std::string &dense_folder,
+        const std::string &output_folder,
+        const Problem &problem)
 {
     uint32_t rows = scaled_image_float.rows;
     uint32_t cols = scaled_image_float.cols;
@@ -962,19 +1051,29 @@ void RunJBU(const cv::Mat_<float>  &scaled_image_float, const cv::Mat_<float> &s
 
     cv::Mat_<float> depthmap = cv::Mat::zeros( rows, cols, CV_32FC1 );
 
+    int count_wrong = 0;
     for (uint32_t i = 0; i < cols; ++i) {
         for(uint32_t j = 0; j < rows; ++j) {
             int center = i + cols * j;
             if (jbu.depth_h[center] != jbu.depth_h[center]) {
-                std::cout << "wrong!" << std::endl;
+                count_wrong++;
             }
             depthmap (j, i) = jbu.depth_h[center];
         }
     }
 
+    std::cout << "found " << count_wrong << " wrong!" << std::endl;
     cv::Mat_<float> disp0 = depthmap.clone();
+
+//    cv:: Mat depth_vis;
+//    disp0.convertTo(depth_vis, CV_8U, 255.f/800.f);
+//    cv::imshow("JBU depths", depth_vis);
+//    cv::waitKey(-1);
+
+
     std::stringstream result_path;
-    result_path << dense_folder << "/ACMMP" << "/2333_" << std::setw(8) << std::setfill('0') << problem.ref_image_id;
+    result_path << output_folder << "/2333_" << std::setw(8) << std::setfill('0') <<
+    problem.ref_image_id;
     std::string result_folder = result_path.str();
     mkdir(result_folder.c_str(), 0777);
     std::string depth_path = result_folder + "/depths.dmb";

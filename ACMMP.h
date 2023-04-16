@@ -15,7 +15,9 @@ void ProjectonCamera(const float3 PointX, const Camera camera, float2 &point, fl
 float GetAngle(const cv::Vec3f &v1, const cv::Vec3f &v2);
 void StoreColorPlyFileBinaryPointCloud (const std::string &plyFilePath, const std::vector<PointList> &pc);
 
-void RunJBU(const cv::Mat_<float>  &scaled_image_float, const cv::Mat_<float> &src_depthmap, const std::string &dense_folder , const Problem &problem);
+void RunJBU(const cv::Mat_<float>  &scaled_image_float, const cv::Mat_<float> &src_depthmap,
+            const std::string &dense_folder, const std::string &output_folder,
+            const Problem &problem);
 
 #define CUDA_SAFE_CALL(error) CudaSafeCall(error, __FILE__, __LINE__)
 #define CUDA_CHECK_ERROR() CudaCheckError(__FILE__, __LINE__)
@@ -28,7 +30,7 @@ struct cudaTextureObjects {
 };
 
 struct PatchMatchParams {
-    int max_iterations = 3;
+    int max_iterations = 2;
     int patch_size = 11;
     int num_images = 5;
     int max_image_size=3200;
@@ -58,18 +60,25 @@ public:
     ACMMP();
     ~ACMMP();
 
-    void InputInitialization(const std::string &dense_folder, const std::vector<Problem> &problem, const int idx);
-    void Colmap2MVS(const std::string &dense_folder, std::vector<Problem> &problems);
-    void CudaSpaceInitialization(const std::string &dense_folder, const Problem &problem);
+    void InputInitialization(const std::string &dense_folder,
+                             const std::string &output_folder,
+                             const std::vector<Problem> &problem, const int idx);
+    void Colmap2MVS(const std::string &dense_folder,
+                    std::vector<Problem> &problems);
+    void CudaSpaceInitialization(const std::string &output_folder, const Problem &problem);
     void RunPatchMatch();
     void SetGeomConsistencyParams(bool multi_geometry);
     void SetPlanarPriorParams();
     void SetHierarchyParams();
+    void SetPlanarPrior(std::unique_ptr<float4> prior);
 
     int GetReferenceImageWidth();
     int GetReferenceImageHeight();
     cv::Mat GetReferenceImage();
     float4 GetPlaneHypothesis(const int index);
+
+    Camera GetCamera(const int index);
+
     float GetCost(const int index);
     void GetSupportPoints(std::vector<cv::Point>& support2DPoints);
     std::vector<Triangle> DelaunayTriangulation(const cv::Rect boundRC, const std::vector<cv::Point>& points);
@@ -78,7 +87,9 @@ public:
     float GetMinDepth();
     float GetMaxDepth();
     void CudaPlanarPriorInitialization(const std::vector<float4> &PlaneParams, const cv::Mat_<float> &masks);
+
 private:
+
     int num_images;
     std::vector<cv::Mat> images;
     std::vector<cv::Mat> depths;
@@ -92,6 +103,9 @@ private:
     float4 *prior_planes_host;
     unsigned int *plane_masks_host;
     PatchMatchParams params;
+
+    std::unique_ptr<float4> sampled_prior_host;
+    float4 *sample_prior_cuda;
 
     Camera *cameras_cuda;
     cudaArray *cuArray[MAX_IMAGES];
@@ -144,5 +158,8 @@ public:
     void InitializeParameters(int n);
     void CudaRun();
 };
+
+
+
 
 #endif // _ACMMP_H_

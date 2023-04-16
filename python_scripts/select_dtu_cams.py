@@ -72,7 +72,7 @@ def setup_from_source(cams, src: Path, dst:Path, recon_params: ReconParams):
 
     if dst.exists():
         shutil.rmtree(dst)
-    dst.mkdir()
+    dst.mkdir(parents=True)
     cam_dir = dst/'cams'
     cam_dir.mkdir()
     im_dir = dst/'images'
@@ -88,23 +88,10 @@ def setup_from_source(cams, src: Path, dst:Path, recon_params: ReconParams):
         write_pair_file(f, pairs)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 if __name__ == '__main__':
-    source_loc = Path("../recons/dtu_scan6")
-    output = Path("../recons/cam_five_dense")
+    source_loc = Path("../recons/dtu/scan62")
+    output = Path("../recons/sketch/dtu62_cams_5")
 
-    r_param = ReconParams(mindist=300, maxdist=800)
-    cams = [31, 32, 33, 34, 35]
-
+    r_param = ReconParams(mindist=300, maxdist=800, maxangle=120)
+    cams = [13, 17, 38, 43, 48]
     setup_from_source(cams, source_loc, output, r_param)

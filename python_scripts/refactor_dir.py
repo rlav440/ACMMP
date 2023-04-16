@@ -15,5 +15,5 @@ def restring_dir(dur: Path):
 
 
 if __name__ == '__main__':
-    targ_dir = Path("../recons/dtu_scan9/cams")
+    targ_dir = Path("../recons/sketch/dtu_scan9/cams")
     restring_dir(targ_dir)

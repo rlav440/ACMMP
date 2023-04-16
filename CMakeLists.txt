@@ -4,9 +4,10 @@ project (ACMMP)
 set(CUDA_TOOLKIT_ROOT_DIR "/usr/local/cuda-8.0")
 find_package(CUDA 6.0 REQUIRED ) # For Cuda Managed Memory and c++11
 find_package(OpenCV REQUIRED )
+find_package(Boost COMPONENTS program_options REQUIRED)
 
 
-include_directories(${OpenCV_INCLUDE_DIRS})
+include_directories(${OpenCV_INCLUDE_DIRS} ${Boost_INCLUDE_DIR})
 include_directories(.)
 
 set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS};-O3 --use_fast_math --maxrregcount=128 --ptxas-options=-v -std=c++11 --compiler-options -Wall -gencode arch=compute_86,code=sm_86)
@@ -41,5 +42,5 @@ cuda_add_executable(
 # For linking ...
 # Specify target & libraries to link it with
 target_link_libraries(ACMMP
-    ${OpenCV_LIBS}
+    ${OpenCV_LIBS} ${Boost_LIBRARIES}
     )

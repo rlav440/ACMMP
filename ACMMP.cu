@@ -1,5 +1,7 @@
 #include "ACMMP.h"
 
+//#define DEBUG
+
 #define mul4(v,k) { \
     v->x = v->x * k; \
     v->y = v->y * k; \
@@ -11,6 +13,13 @@
     v->y = v->y / k; \
     v->z = v->z / k;\
 }
+
+__device__ float4 upscale_normal(const cudaTextureObjects *texture_objects,
+                      const float4 *scaled_plane_hypotheses, float *costs,
+                      const PatchMatchParams &params, const int2 &p,
+                      const int center, const float sigmad, const float sigmar,
+                      int num_neighbors, const float o_y, const float o_x,
+                      const float refPix);
 
 __device__  void sort_small(float *d, const int n)
 {
@@ -153,7 +162,9 @@ __device__  float RangeGauss(float x, float sigma, float mu = 0.0)
 
 __device__ float ComputeDepthfromPlaneHypothesis(const Camera camera, const float4 plane_hypothesis, const int2 p)
 {
-    return -plane_hypothesis.w * camera.K[0] / ((p.x - camera.K[2]) * plane_hypothesis.x + (camera.K[0] / camera.K[4]) * (p.y - camera.K[5]) * plane_hypothesis.y + camera.K[0] * plane_hypothesis.z);
+    return -plane_hypothesis.w * camera.K[0] / ((p.x - camera.K[2]) * plane_hypothesis.x
+    + (camera.K[0] / camera.K[4]) * (p.y - camera.K[5]) * plane_hypothesis.y
+    + camera.K[0] * plane_hypothesis.z);
 }
 
 __device__ float4 GenerateRandomNormal(const Camera camera, const int2 p, curandState *rand_state, const float depth)
@@ -534,7 +545,72 @@ __device__ float ComputeGeomConsistencyCost(const cudaTextureObject_t depth_imag
 // need to add a new param state: seeded | Done
 // then need to load the initial values to the object
 
-__global__ void RandomInitialization(cudaTextureObjects *texture_objects, Camera *cameras, float4 *plane_hypotheses,  float4 *scaled_plane_hypotheses, float *costs,  float *pre_costs,  curandState *rand_states, unsigned int *selected_views, float4 *prior_planes, unsigned int *plane_masks, const PatchMatchParams params)
+__device__ float4 upscale_normal(const cudaTextureObjects
+*texture_objects,
+                                 const float4 *scaled_plane_hypotheses,
+                                 float *costs,
+                                 const PatchMatchParams &params, const int2 &p,
+                                 const int center, const float sigmad,
+                                 const float sigmar,
+                                 int num_neighbors, const float o_y,
+                                 const float o_x,
+                                 const float refPix) {
+    int r_y = 0;
+    int r_ys = 0;
+    int r_x = 0;
+    int r_xs = 0;
+    float sgauss = 0.0, rgauss = 0.0, totalgauss = 0.0;
+    float c_total_val = 0.0, normalizing_factor = 0.0;
+    float  srcPix = 0, neighborPix = 0;
+    float4 srcNorm;
+    float4 n_total_val;
+    n_total_val.x = 0;
+    n_total_val.y = 0;
+    n_total_val.z = 0;
+    n_total_val.w = 0;
+
+    for (int j = -num_neighbors; j <= num_neighbors; ++j) {
+                    // source
+                    r_y = o_y + j;
+                    r_y = (r_y > 0 ? (r_y < params.scaled_rows ? r_y : params.scaled_rows - 1) : 0) ;
+                    // reference
+                    r_ys = p.y + j;
+                    for (int i = -num_neighbors; i <= num_neighbors; ++i) {
+                        // source
+                        r_x = o_x + i;
+                        r_x = (r_x > 0 ? (r_x < params.scaled_cols? r_x : params.scaled_cols - 1) : 0);
+                        const int s_center = r_y*params.scaled_cols+r_x;
+                        if (s_center >=  params.scaled_rows * params.scaled_cols) {
+                            printf("Illegal: %d, %d, %f, %f (%d, %d)\n", r_x, r_y, o_x, o_y, params.scaled_cols,  params.scaled_rows);
+                        }
+                        srcPix = scaled_plane_hypotheses[s_center].w;
+                        srcNorm = scaled_plane_hypotheses[s_center];
+                        // refIm
+                        r_xs = p.x + i;
+                        neighborPix = tex2D<float>(texture_objects[0].images[0], r_xs + 0.5f, r_ys + 0.5f);
+
+                        sgauss = SpatialGauss(o_x, o_y, r_x, r_y, sigmad);
+                        rgauss = RangeGauss(fabs(refPix - neighborPix), sigmar);
+                        totalgauss = sgauss * rgauss;
+                        normalizing_factor += totalgauss;
+                        c_total_val += srcPix * totalgauss;
+                        mul4((&srcNorm), totalgauss);
+                        n_total_val.x  = n_total_val.x + srcNorm.x;
+                        n_total_val.y  = n_total_val.y + srcNorm.y;
+                        n_total_val.z  = n_total_val.z + srcNorm.z;
+                    }
+                }
+    costs[center] = c_total_val / normalizing_factor;
+    vecdiv4((&n_total_val), normalizing_factor);
+    NormalizeVec3(&n_total_val);
+    return n_total_val;
+}
+
+__global__ void RandomInitialization(
+        cudaTextureObjects *texture_objects, Camera *cameras, float4 *plane_hypotheses,  float4 *scaled_plane_hypotheses,
+        float *costs,  float *pre_costs,  curandState *rand_states, unsigned int *selected_views, float4 *prior_planes,
+        unsigned int *plane_masks, float4 * sampled_plane_priors,
+        const PatchMatchParams params)
 {
     const int2 p = make_int2(blockIdx.x * blockDim.x + threadIdx.x, blockIdx.y * blockDim.y + threadIdx.y);
     int width = cameras[0].width;
@@ -547,16 +623,19 @@ __global__ void RandomInitialization(cudaTextureObjects *texture_objects, Camera
     const int center = p.y * width + p.x;
     curand_init(clock64(), p.y, p.x, &rand_states[center]);
 
-    if (!params.geom_consistency && !params.hierarchy ) {
-        if (!params.seeded)
-            plane_hypotheses[center] = GenerateRandomPlaneHypothesis(
+    if (!params.geom_consistency && !params.hierarchy && !params.seeded) {
+        plane_hypotheses[center] = GenerateRandomPlaneHypothesis(
                     cameras[0], p, &rand_states[center], params.depth_min, params.depth_max
                     );
-        else
-            plane_hypotheses[center] = prior_planes[center]; // Neat trick, can just pull in prior plane, make earlier.
         costs[center] = ComputeMultiViewInitialCostandSelectedViews(
                 texture_objects[0].images, cameras, p, plane_hypotheses[center], &selected_views[center], params
                 );
+    }
+    else if (params.seeded) {
+        plane_hypotheses[center] = sampled_plane_priors[center];
+        costs[center] = ComputeMultiViewInitialCostandSelectedViews(
+                texture_objects[0].images, cameras, p, plane_hypotheses[center],
+                &selected_views[center], params);
     }
     else if (params.planar_prior) {
         if (plane_masks[center] > 0 && costs[center] >= 0.1f) {
@@ -592,53 +671,13 @@ __global__ void RandomInitialization(cudaTextureObjects *texture_objects, Camera
             const float o_y = p.y * scale;
             const float o_x = p.x * scale;
             const float refPix = tex2D<float>(texture_objects[0].images[0], p.x + 0.5f, p.y + 0.5f);
-            int r_y = 0;
-            int r_ys = 0;
-            int r_x = 0;
-            int r_xs = 0;
-            float sgauss = 0.0, rgauss = 0.0, totalgauss = 0.0;
-            float c_total_val = 0.0, normalizing_factor = 0.0;
-            float  srcPix = 0, neighborPix = 0;
-            float4 srcNorm;
-            float4 n_total_val;
-            n_total_val.x = 0; n_total_val.y = 0; n_total_val.z = 0; n_total_val.w = 0;
-     \
-            for (int j = -num_neighbors; j <= num_neighbors; ++j) {
-                // source
-                r_y = o_y + j;
-                r_y = (r_y > 0 ? (r_y < params.scaled_rows ? r_y : params.scaled_rows - 1) : 0) ;
-                // reference
-                r_ys = p.y + j;
-                for (int i = -num_neighbors; i <= num_neighbors; ++i) {
-                    // source
-                    r_x = o_x + i;
-                    r_x = (r_x > 0 ? (r_x < params.scaled_cols? r_x : params.scaled_cols - 1) : 0);
-                    const int s_center = r_y*params.scaled_cols+r_x;
-                    if (s_center >=  params.scaled_rows * params.scaled_cols) {
-                        printf("Illegal: %d, %d, %f, %f (%d, %d)\n", r_x, r_y, o_x, o_y, params.scaled_cols,  params.scaled_rows);
-                    }
-                    srcPix = scaled_plane_hypotheses[s_center].w;
-                    srcNorm = scaled_plane_hypotheses[s_center];
-                    // refIm
-                    r_xs = p.x + i;
-                    neighborPix = tex2D<float>(texture_objects[0].images[0], r_xs + 0.5f, r_ys + 0.5f);
+            float4 n_total_val = upscale_normal(texture_objects,
+                                                scaled_plane_hypotheses, costs,
+                                                params, p, center, sigmad,
+                                                sigmar, num_neighbors,
+                                                o_y, o_x, refPix);
 
-                    sgauss = SpatialGauss(o_x, o_y, r_x, r_y, sigmad);
-                    rgauss = RangeGauss(fabs(refPix - neighborPix), sigmar);
-                    totalgauss = sgauss * rgauss;
-                    normalizing_factor += totalgauss;
-                    c_total_val += srcPix * totalgauss;
-                    mul4((&srcNorm), totalgauss);
-                    n_total_val.x  = n_total_val.x + srcNorm.x;
-                    n_total_val.y  = n_total_val.y + srcNorm.y;
-                    n_total_val.z  = n_total_val.z + srcNorm.z;
-                }
-            }
-            costs[center] = c_total_val / normalizing_factor;
-            vecdiv4((&n_total_val), normalizing_factor);
-            NormalizeVec3(&n_total_val);
-
-             costs[center] = ComputeMultiViewInitialCostandSelectedViews(texture_objects[0].images, cameras, p, plane_hypotheses[center], &selected_views[center], params);
+            costs[center] = ComputeMultiViewInitialCostandSelectedViews(texture_objects[0].images, cameras, p, plane_hypotheses[center], &selected_views[center], params);
             pre_costs[center] = costs[center];
 
             float4 plane_hypothesis = n_total_val;
@@ -1312,10 +1351,36 @@ __global__ void RedPixelFilter(const Camera *cameras, float4 *plane_hypotheses, 
     CheckerboardFilter(cameras, plane_hypotheses, costs, p);
 }
 
+
+
+void visualise_cuda_data(float4 * cuda_data, Camera cam, int waitKey = -1,
+                         std::string imname = "image"){
+    int rows = cam.height, cols = cam.width;
+//    int num_ele = rows*cols;
+
+    auto imbuffer = new float4[rows * cols];
+//    auto depthbuffer = new float[rows*cols];
+    auto size = rows * cols * sizeof(float4);
+
+    cv::Mat_<float> image = cv::Mat::zeros(rows, cols, CV_32F);
+    cudaMemcpy(imbuffer, cuda_data, size, cudaMemcpyDeviceToHost);
+    for(int i=0; i<rows; i++){
+        for (int j=0; j<cols; j++){
+            image(i,j) = imbuffer[i * cols + j].w;
+        }
+    }
+    cv::Mat disp;
+    image.convertTo(disp, CV_8U,255./cam.depth_max);
+    cv::imshow(imname, disp);
+    cv::waitKey(waitKey);
+}
+
 void ACMMP::RunPatchMatch()
 {
     const int width = cameras[0].width;
     const int height = cameras[0].height;
+
+    std::cout << "Running with: "  << height << " " << width << std::endl;
 
     int BLOCK_W = 32;
     int BLOCK_H = (BLOCK_W / 2);
@@ -1340,8 +1405,24 @@ void ACMMP::RunPatchMatch()
 
     int max_iterations = params.max_iterations;
 
-    RandomInitialization<<<grid_size_randinit, block_size_randinit>>>(texture_objects_cuda, cameras_cuda, plane_hypotheses_cuda, scaled_plane_hypotheses_cuda, costs_cuda, pre_costs_cuda, rand_states_cuda, selected_views_cuda, prior_planes_cuda, plane_masks_cuda, params);
+    std::cout << "Init params \n"
+    "Planar prior:" << params.planar_prior <<
+    " Geom Consist:" << params.geom_consistency <<
+    " Seeded:" << params.seeded <<
+    " Multi Geometry:" << params.multi_geometry <<
+    std::endl;
+
+    RandomInitialization<<<grid_size_randinit, block_size_randinit>>>(
+            texture_objects_cuda, cameras_cuda, plane_hypotheses_cuda,
+            scaled_plane_hypotheses_cuda, costs_cuda, pre_costs_cuda, rand_states_cuda,
+            selected_views_cuda, prior_planes_cuda, plane_masks_cuda, sample_prior_cuda,
+            params
+            );
     CUDA_SAFE_CALL(cudaDeviceSynchronize());
+
+#ifdef DEBUG
+    visualise_cuda_data(plane_hypotheses_cuda, cameras[0], 1, "Pre iteration");
+#endif
 
     for (int i = 0; i < max_iterations; ++i) {
         BlackPixelUpdate<<<grid_size_checkerboard, block_size_checkerboard>>>(texture_objects_cuda, texture_depths_cuda, cameras_cuda, plane_hypotheses_cuda, costs_cuda, pre_costs_cuda, rand_states_cuda, selected_views_cuda, prior_planes_cuda, plane_masks_cuda, params, i);
@@ -1351,13 +1432,22 @@ void ACMMP::RunPatchMatch()
         printf("iteration: %d\n", i);
     }
 
-    GetDepthandNormal<<<grid_size_randinit, block_size_randinit>>>(cameras_cuda, plane_hypotheses_cuda, params);
+#ifdef DEBUG
+    visualise_cuda_data(plane_hypotheses_cuda, cameras[0], 1, "Post Iteration");
+#endif
+
+    GetDepthandNormal<<<grid_size_randinit, block_size_randinit>>>(
+            cameras_cuda, plane_hypotheses_cuda, params
+            );
     CUDA_SAFE_CALL(cudaDeviceSynchronize());
 
     BlackPixelFilter<<<grid_size_checkerboard, block_size_checkerboard>>>(cameras_cuda, plane_hypotheses_cuda, costs_cuda);
     CUDA_SAFE_CALL(cudaDeviceSynchronize());
     RedPixelFilter<<<grid_size_checkerboard, block_size_checkerboard>>>(cameras_cuda, plane_hypotheses_cuda, costs_cuda);
     CUDA_SAFE_CALL(cudaDeviceSynchronize());
+
+
+
 
     cudaMemcpy(plane_hypotheses_host, plane_hypotheses_cuda, sizeof(float4) * width * height, cudaMemcpyDeviceToHost);
     cudaMemcpy(costs_host, costs_cuda, sizeof(float) * width * height, cudaMemcpyDeviceToHost);
@@ -1393,7 +1483,7 @@ __global__ void JBU_cu(JBUParameters *jp, JBUTexObj *jt, float *depth)
     int r_xs = 0;
     float sgauss = 0.0, rgauss = 0.0, totalgauss = 0.0;
     float total_val = 0.0, normalizing_factor = 0.0;
-    float  srcPix = 0, neighborPix = 0;
+    float srcPix = 0, neighborPix = 0;
 
     for (int j = -num_neighbors; j <= num_neighbors; ++j) {
         // source
@@ -1406,7 +1496,7 @@ __global__ void JBU_cu(JBUParameters *jp, JBUTexObj *jt, float *depth)
             // source
             r_x = o_x + i;
             r_x = (r_x > 0 ? (r_x < jp[0].s_width ? r_x : jp[0].s_width - 1) : 0);
-           srcPix = tex2D<float>(jt[0].imgs[1], r_x + 0.5f, r_y + 0.5f);
+            srcPix = tex2D<float>(jt[0].imgs[1], r_x + 0.5f, r_y + 0.5f);
             // refIm
             r_xs = p.x + i;
             r_xs = (r_xs > 0 ? (r_xs < jp[0].width ? r_xs :jp[0].width - 1) : 0) ;
@@ -1443,15 +1533,15 @@ void JBU::CudaRun()
 
     cudaEventRecord(start);
 
-    cudaDeviceSynchronize();
+    CUDA_SAFE_CALL(cudaDeviceSynchronize());
     JBU_cu<<< grid_size_initrand, block_size_initrand>>>(jp_d, jt_d, depth_d);
-    cudaDeviceSynchronize();
+    CUDA_SAFE_CALL(cudaDeviceSynchronize());
 
     cudaMemcpy(depth_h, depth_d, sizeof(float) * rows * cols, cudaMemcpyDeviceToHost);
-    cudaDeviceSynchronize();
+    CUDA_SAFE_CALL(cudaDeviceSynchronize());
 
     cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
+    CUDA_SAFE_CALL(cudaEventSynchronize(stop));
     float milliseconds = 0;
     cudaEventElapsedTime(&milliseconds, start, stop);
     printf("Total time needed for computation: %f seconds\n", milliseconds / 1000.f);

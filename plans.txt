@@ -46,4 +46,6 @@ at very very high resolutions.
 # maybe there is an idea here to have a lower resolution internal probability mesh, then the final depth maps are
 able to operate at a higher resolution than the underlying map.
 
+What we see is that a few things are actually
+
 
