@@ -3,7 +3,7 @@
 #include "pSampler.h"
 #include "boost/program_options.hpp"
 
-#define DEBUG
+//#define DEBUG
 
 void GenerateSampleList(const std::string &dense_folder, std::vector<Problem> &problems)
 {
@@ -403,7 +403,8 @@ void RunPriorAwareFusion(
         std::string &dense_folder, std::string &outfolder,
         std::string &fusion_folder,
          const std::vector<Problem> &problems, bool geom_consistency, float
-         consistency_scalar)
+         consistency_scalar, int num_consistent_thresh,
+         int single_match_penalty = 1)
 {
     size_t num_images = problems.size();
     std::string image_folder = dense_folder + std::string("/images");
@@ -538,7 +539,7 @@ void RunPriorAwareFusion(
                             d_cons_0 += cons.dynamic_consistency;
                         }
                     }
-                    d_thresh_0 = (n_consistent_0 >= 1) && (d_cons_0 >
+                    d_thresh_0 = (n_consistent_0 >= num_consistent_thresh) && (d_cons_0 >
                                                            consistency_scalar *
                                                            n_consistent_0);
                 }
@@ -563,7 +564,7 @@ void RunPriorAwareFusion(
                         }
                     }
 
-                    d_thresh_1 = (n_consistent_1 >= 0) &&
+                    d_thresh_1 = (n_consistent_1 >= num_consistent_thresh) &&
                             (d_cons_1 > consistency_scalar * n_consistent_1);
                 }
 
@@ -574,6 +575,7 @@ void RunPriorAwareFusion(
                 float g_depth;
                 cv::Vec3f g_normal;
 
+                // if both pass, take the biggest.
                 if (d_thresh_0 && d_thresh_1) { // prioritise...
                     passing = true;
                     if (n_consistent_1 >= n_consistent_0) {
@@ -586,19 +588,25 @@ void RunPriorAwareFusion(
                         g_depth = ref_depth;
                         g_normal = ref_normal;
                     }
-
-                } else if (d_thresh_1){
+                }
+                // if one passes, make them take a harsher test.
+                else if (d_thresh_1){
+                    d_thresh_1 = d_thresh_1 && (n_consistent_1 >=
+                            (num_consistent_thresh + single_match_penalty));
                     passing = d_thresh_1;
                     to_iterate = consistency_candidates_1;
                     g_depth = ref_p_depth;
                     g_normal = ref_p_normal;
                 } else {
+                    d_thresh_0 = d_thresh_0 && (n_consistent_0 >=
+                            (num_consistent_thresh + single_match_penalty));
                     passing = d_thresh_0;
                     to_iterate = consistency_candidates_0;
                     g_depth = ref_depth;
                     g_normal = ref_normal;
                 }
 
+                // now we need to put in the additional chefck.
 
                 if (passing) {
 
@@ -640,7 +648,7 @@ void RunPriorAwareFusion(
 
 void RunFusion(std::string &dense_folder, std::string &outfolder,
                const std::vector<Problem> &problems, bool geom_consistency,
-               float consistency_scalar)
+               float consistency_scalar, int con_num_thresh)
 {
     size_t num_images = problems.size();
     std::string image_folder = dense_folder + std::string("/images");
@@ -696,6 +704,8 @@ void RunFusion(std::string &dense_folder, std::string &outfolder,
 
     std::vector<PointList> PointCloud;
     PointCloud.clear();
+
+    // change this to use an ACMMP thresholded value
 
     for (size_t i = 0; i < num_images; ++i) {
         std::cout << "Fusing image " << std::setw(8) << std::setfill('0') << i << "..." << std::endl;
@@ -764,7 +774,7 @@ void RunFusion(std::string &dense_folder, std::string &outfolder,
                     }
                 }
 
-                if (num_consistent >= 1 && (dynamic_consistency >
+                if (num_consistent >= con_num_thresh && (dynamic_consistency >
                 consistency_scalar *
                 num_consistent)) {
                     /*consistent_Point.x /= (num_consistent + 1.0f);
@@ -800,6 +810,9 @@ int main(int argc, char** argv)
     std::string fusion_dir = "/ACMMP";
 
     float consistency_scalar = 0.3;
+    int num_consistent_thresh = 1;
+    int single_match_penalty = 0;
+
     po::options_description desc("allowed options");
     desc.add_options()
     ("help,h", "produce help message")
@@ -817,6 +830,13 @@ int main(int argc, char** argv)
     ("force_fusion", "forces multi fusion, without prior")
     ("output_dir", po::value<std::string>(&output_dir)->implicit_value("/ACCMP"),
             "Output working directory name")
+    ("num_consistent_thresh", po::value<int>(&num_consistent_thresh),
+            "Number of points that must be consistent to be fused into the "
+            "final output pointcloud.")
+    ("single_match_penalty", po::value<int>(&single_match_penalty),
+            "An increase to the consistency threshold for matched "
+            "hypotheses that only matched over a single set")
+
 
     ;
     po::positional_options_description p;
@@ -954,13 +974,13 @@ int main(int argc, char** argv)
         RunPriorAwareFusion(
                 dense_folder, output_folder, fusion_folder, problems,
                 geom_consistency,
-                consistency_scalar
+                consistency_scalar, num_consistent_thresh, single_match_penalty
                 );
     }
     else{
         RunFusion(
                 dense_folder, output_folder, problems, geom_consistency,
-                consistency_scalar
+                consistency_scalar, num_consistent_thresh
                 );
     }
     return 0;
