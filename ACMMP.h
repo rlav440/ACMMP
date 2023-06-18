@@ -1,7 +1,7 @@
 #ifndef _ACMMP_H_
 #define _ACMMP_H_
 
-#include "main.h"
+#include "acmmp_definitions.h"
 
 int readDepthDmb(const std::string file_path, cv::Mat_<float> &depth);
 int readNormalDmb(const std::string file_path, cv::Mat_<cv::Vec3f> &normal);

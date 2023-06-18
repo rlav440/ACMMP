@@ -1,5 +1,6 @@
 cmake_minimum_required (VERSION 2.8)
-project (ACMMP)
+project (ACMMP_recon)
+
 
 set(CUDA_TOOLKIT_ROOT_DIR "/usr/local/cuda-8.0")
 find_package(CUDA 6.0 REQUIRED ) # For Cuda Managed Memory and c++11
@@ -27,20 +28,39 @@ if (OPENMP_FOUND)
     set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
 endif()
 
+add_library(
+        ${PROJECT_NAME} SHARED
+        acmmp_definitions.cpp
+        main_fusion.cpp
+)
 
 # For compilation ...
 # Specify target & source files to compile it from
-cuda_add_executable(
-    ACMMP
-    main.h
-    ACMMP.h
-    ACMMP.cpp
-    ACMMP.cu
-    main.cpp
-        pSampler.cpp pSampler.h)
 
 # For linking ...
 # Specify target & libraries to link it with
-target_link_libraries(ACMMP
+target_link_libraries(${PROJECT_NAME}
     ${OpenCV_LIBS} ${Boost_LIBRARIES}
     )
+
+cuda_add_executable(
+        ACMMP
+        main_ACMMP.cpp
+        acmmp_definitions.h
+        ACMMP.h
+        ACMMP.cpp
+        ACMMP.cu
+        acmmp_definitions.cpp
+        )
+
+target_link_libraries(
+        ACMMP ${PROJECT_NAME}
+)
+
+add_executable(
+        fuse_data
+        main_fusion.cpp
+        acmmp_definitions.cpp
+        acmmp_definitions.h
+)
+target_link_libraries(fuse_data ${PROJECT_NAME})

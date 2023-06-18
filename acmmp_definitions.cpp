@@ -1,9 +1,181 @@
-#include "main.h"
+#include "acmmp_definitions.h"
 #include "ACMMP.h"
-#include "pSampler.h"
 #include "boost/program_options.hpp"
 
 //#define DEBUG
+
+
+
+pSampler::pSampler(const std::string& dense_folder, int ncams) {
+    using cv::Mat;
+
+    prior_folder = dense_folder + std::string("priors");
+    depth_folder = prior_folder + std::string("/depths");
+    normal_folder = prior_folder + std::string("/normals");
+
+    // try to load the final image in the folders to assess if we are running this with priors.
+    std::stringstream norm_path;
+    std::stringstream depth_path;
+    norm_path << normal_folder << "/" << std::setw(8) << std::setfill('0') << (ncams - 1) << ".png";
+    depth_path << depth_folder << "/" << std::setw(8) << std::setfill('0') << (ncams - 1) << ".png";
+
+    Mat test_depth = cv::imread(depth_path.str());
+    Mat test_norm = cv::imread(norm_path.str());
+
+    if (!test_depth.empty() && !test_norm.empty()){
+        using_prior = true;
+    }
+    else
+        std::cout << "couldn't load priors from "<< norm_path.str() << std::endl;
+
+    probability_volume = nullptr;
+}
+
+pSampler::~pSampler() = default;
+
+void normVec3 (float4 *vec)
+{
+    const float normSquared = vec->x * vec->x + vec->y * vec->y + vec->z * vec->z;
+    const float inverse_sqrt = sqrtf (normSquared);
+    vec->x *= inverse_sqrt;
+    vec->y *= inverse_sqrt;
+    vec->z *= inverse_sqrt;
+}
+
+void get3DPoint(const Camera camera, const int2 p, const float depth, float *X)
+{
+    X[0] = depth * (p.x - camera.K[2]) / camera.K[0];
+    X[1] = depth * (p.y - camera.K[5]) / camera.K[4];
+    X[2] = depth;
+}
+
+float distance_to_origin(Camera cam, int2 p, float depth, float4 normal){
+    float X[3];
+    get3DPoint(cam, p, depth, X);
+    return -(normal.x * X[0] + normal.y * X[1] + normal.z * X[2]);
+    // this defines planes by their minimum distance to the origin.
+}
+
+
+float4 getViewDirection(const Camera camera, const int2 p, const float depth)
+{
+    float X[3];
+    get3DPoint(camera, p, depth, X);
+    float norm = sqrt(X[0] * X[0] + X[1] * X[1] + X[2] * X[2]);
+
+    float4 view_direction;
+    view_direction.x = X[0] / norm;
+    view_direction.y = X[1] / norm;
+    view_direction.z =  X[2] / norm;
+    view_direction.w = 0;
+    return view_direction;
+}
+
+float4 depth_normal_to_plane(const float depth, float3 normal, int2 p, Camera camera){
+    float4 temp = make_float4(normal.x,normal.y,normal.z,0);
+    // loads the normal vector in world coordinates
+    // makes sure it is positive in the camera vector
+
+    float4 view_direction = getViewDirection(camera, p, depth);
+    float dot_product = temp.x * view_direction.x + temp.y * view_direction.y + temp.z * view_direction.z;
+    if (dot_product > 0.0f) {
+        temp.x = -temp.x;
+        temp.y = -temp.y;
+        temp.z = -temp.z;
+    }
+    normVec3(&temp);
+
+    temp.w = distance_to_origin(camera, p, depth, temp);
+    return temp;
+}
+
+bool pSampler::confirm_using_prior() const {
+    return using_prior;
+}
+
+float3 local_v3tof3(cv::Vec3f inp){
+    return make_float3(inp[0], inp[1], inp[2]);
+}
+
+std::unique_ptr<float4> pSampler::GetPriorPlaneEstimate(
+        const int camNum, Camera cam, const int rows, const int cols) {
+    using cv::Mat;
+
+    std::stringstream norm_path;
+    std::stringstream depth_path;
+    norm_path << normal_folder << "/" << std::setw(8) << std::setfill('0') << camNum << ".png";
+    depth_path << depth_folder << "/" << std::setw(8) << std::setfill('0') << camNum << ".png";
+    Mat depth = cv::imread(depth_path.str(), -1);
+    Mat normals = cv::imread(norm_path.str(), -1);
+    if (depth.empty() or normals.empty()){
+        std::cout << "failed to load prior images: " << camNum << std::endl;
+        throw std::runtime_error("error");
+    }
+//    cv::imshow("prior depth", depth);
+//    cv::imshow("prior normals", normals);
+//    cv::waitKey(-1);
+
+    Mat conv_normals;
+    normals.convertTo(conv_normals, CV_32FC3,
+                      2.0/65536.0, -1.0
+    );
+    const float dist = (cam.depth_max - cam.depth_min);
+    const float range = dist/65535.0f;
+    Mat conv_depths;
+    depth.convertTo(
+            conv_depths, CV_32F,
+            range,
+            cam.depth_min
+            //0
+    );
+
+//    int rows = depth.rows / scale;
+//    int cols = depth.cols / scale;
+
+    int scale = depth.rows/rows;
+
+    std::cout << "Starting initialisation: " << rows << " " << cols << std::endl;
+    auto plane_hypothesis = new float4[rows * cols];
+    int k;
+
+    cv::Mat_<float> depths_im = cv::Mat::zeros(rows, cols, CV_32FC1);
+    cv::Mat_<cv::Vec3f> normals_im = cv::Mat::zeros(rows, cols, CV_32FC3);
+
+    for (int i=0; i < rows; i++){
+        for (int j = 0; j < cols; ++j){
+            k = i * cols + j;
+
+            float base_d = conv_depths.at<float>(i * scale,j * scale);
+            float4 plane = depth_normal_to_plane(
+                    base_d,
+                    local_v3tof3(conv_normals.at<cv::Vec3f>(i * scale,j *
+                    scale)),
+                    make_int2(j,i),
+                    cam
+            );
+//            if((i%100 == 0) && (j%100 ==0)){
+//                std::cout << "loaded depth value: " << base_d << std::endl;
+//            }
+//           plane = make_float4(0,0,0,0);
+            plane_hypothesis[k] = plane;
+            depths_im(i, j) = plane.w;
+            normals_im(i,j) = cv::Vec3f(
+                    plane.x, plane.y, plane.z);
+        }
+    }
+#ifdef DEBUG
+    Mat depths_vis;
+    std::cout << "Depth max " << cam.depth_max << std::endl;
+    depths_im.convertTo(depths_vis, CV_8U, 255.f/800);
+
+    cv::imshow("normals loaded", normals_im);
+    cv::imshow("depths loaded", depths_vis);
+    cv::waitKey(-1);
+
+    std::cout << "Loaded the prior image" << std::endl;
+#endif
+    return std::unique_ptr<float4>(plane_hypothesis);
+}
 
 void GenerateSampleList(const std::string &dense_folder, std::vector<Problem> &problems)
 {
@@ -74,7 +246,7 @@ int ComputeMultiScaleSettings(const std::string &dense_folder, std::vector<Probl
 void ProcessProblem(
         pSampler &pSample, const std::string output_folder,
         const std::string &dense_folder, const std::vector<Problem> &problems, const int idx,
-        bool geom_consistency, bool planar_prior, bool hierarchy, bool multi_geometry=false, bool seeded=false
+        bool geom_consistency, bool planar_prior, bool hierarchy, bool multi_geometry, bool seeded
                 )
 {
     const Problem &problem = problems[idx];
@@ -268,7 +440,7 @@ void JointBilateralUpsampling(
            dense_folder, output_folder, problem );
 }
 
-// from here on are the changes to the metric
+
 struct c_info{
     float dynamic_consistency=0;
     int x=0, y=0;
@@ -303,7 +475,7 @@ c_info get_consistency_metrics(const std::vector<Camera> &cameras, size_t i, int
     cmetric res1;
     if (src_depth_1 > 0) {
         float3 tmp_X = Get3DPointonWorld(src_c, src_r, src_depth_1,
-                                     cameras[src_id]);
+                                         cameras[src_id]);
         float2 tmp_pt;
         float proj_depth;
         ProjectonCamera(tmp_X, cameras[i], tmp_pt, proj_depth);
@@ -323,10 +495,10 @@ c_info get_consistency_metrics(const std::vector<Camera> &cameras, size_t i, int
     result.y = src_r;
     float dc0 = exp(
             -(res0.reproj_err + 200 * res0.relative_depth_diff + res0.angle *
-            10));
+                                                                 10));
     float dc1 = exp(
             -(res1.reproj_err + 200 * res1.relative_depth_diff + res1.angle *
-            10));
+                                                                 10));
 
     if (thresh_check_0 && thresh_check_1){
         result.dynamic_consistency = fmax(dc0, dc1);
@@ -358,7 +530,7 @@ void getCandidates(const std::vector<Problem> &problems,
                    size_t i, int num_ngb, int r, int c,
                    float ref_depth,
                    const cv::Vec3f &ref_normal
-                   ){
+){
 
     for (int j = 0; j < num_ngb; ++j) { // For every other pair cam, for the
         // one given reference depth
@@ -390,10 +562,10 @@ void getCandidates(const std::vector<Problem> &problems,
                     .at<cv::Vec3f>(src_r, src_c);
 
             auto metric = get_consistency_metrics(cameras, i, r, c,
-                                    ref_depth, ref_normal,
-                                    src_id, src_r, src_c,
-                                    src_depth, src_normal,
-                                    src_p_depth, src_p_normal);
+                                                  ref_depth, ref_normal,
+                                                  src_id, src_r, src_c,
+                                                  src_depth, src_normal,
+                                                  src_p_depth, src_p_normal);
             consistency_candidates.push_back(metric);
         }
     }
@@ -402,9 +574,9 @@ void getCandidates(const std::vector<Problem> &problems,
 void RunPriorAwareFusion(
         std::string &dense_folder, std::string &outfolder,
         std::string &fusion_folder,
-         const std::vector<Problem> &problems, bool geom_consistency, float
-         consistency_scalar, int num_consistent_thresh,
-         int single_match_penalty = 1)
+        const std::vector<Problem> &problems, bool geom_consistency, float
+        consistency_scalar, int num_consistent_thresh,
+        int single_match_penalty)
 {
     size_t num_images = problems.size();
     std::string image_folder = dense_folder + std::string("/images");
@@ -451,8 +623,8 @@ void RunPriorAwareFusion(
 
         std::stringstream prior_result_path;
         prior_result_path << outfolder << "/2333_" <<
-        std::setw
-        (8) << std::setfill('0') << problems[i].ref_image_id;
+                          std::setw
+                                  (8) << std::setfill('0') << problems[i].ref_image_id;
 
         // we also pull out the expected results
         std::string prior_result_folder = prior_result_path.str();
@@ -531,7 +703,7 @@ void RunPriorAwareFusion(
                             masks, consistency_candidates_0, image_id_2_index,
                             i, num_ngb, r, c,
                             ref_depth, ref_normal
-                            );
+                    );
 
                     for (auto &cons: consistency_candidates_0) {
                         if (cons.below_thresh) {
@@ -540,8 +712,8 @@ void RunPriorAwareFusion(
                         }
                     }
                     d_thresh_0 = (n_consistent_0 >= num_consistent_thresh) && (d_cons_0 >
-                                                           consistency_scalar *
-                                                           n_consistent_0);
+                                                                               consistency_scalar *
+                                                                               n_consistent_0);
                 }
 
                 std::vector<c_info> consistency_candidates_1;
@@ -565,7 +737,7 @@ void RunPriorAwareFusion(
                     }
 
                     d_thresh_1 = (n_consistent_1 >= num_consistent_thresh) &&
-                            (d_cons_1 > consistency_scalar * n_consistent_1);
+                                 (d_cons_1 > consistency_scalar * n_consistent_1);
                 }
 
 //                d_thresh_0 = false;
@@ -589,17 +761,17 @@ void RunPriorAwareFusion(
                         g_normal = ref_normal;
                     }
                 }
-                // if one passes, make them take a harsher test.
+                    // if one passes, make them take a harsher test.
                 else if (d_thresh_1){
                     d_thresh_1 = d_thresh_1 && (n_consistent_1 >=
-                            (num_consistent_thresh + single_match_penalty));
+                                                (num_consistent_thresh + single_match_penalty));
                     passing = d_thresh_1;
                     to_iterate = consistency_candidates_1;
                     g_depth = ref_p_depth;
                     g_normal = ref_p_normal;
                 } else {
                     d_thresh_0 = d_thresh_0 && (n_consistent_0 >=
-                            (num_consistent_thresh + single_match_penalty));
+                                                (num_consistent_thresh + single_match_penalty));
                     passing = d_thresh_0;
                     to_iterate = consistency_candidates_0;
                     g_depth = ref_depth;
@@ -664,7 +836,7 @@ void RunFusion(std::string &dense_folder, std::string &outfolder,
     depths.clear();
     normals.clear();
     masks.clear();
-    
+
     std::map<int, int> image_id_2_index;
 
     for (size_t i = 0; i < num_images; ++i) {
@@ -679,7 +851,7 @@ void RunFusion(std::string &dense_folder, std::string &outfolder,
 
         std::stringstream result_path;
         result_path << outfolder << "/2333_" << std::setw(8) << std::setfill('0') <<
-        problems[i].ref_image_id;
+                    problems[i].ref_image_id;
         std::string result_folder = result_path.str();
         std::string suffix = "/depths.dmb";
         if (geom_consistency) {
@@ -775,8 +947,8 @@ void RunFusion(std::string &dense_folder, std::string &outfolder,
                 }
 
                 if (num_consistent >= con_num_thresh && (dynamic_consistency >
-                consistency_scalar *
-                num_consistent)) {
+                                                         consistency_scalar *
+                                                         num_consistent)) {
                     /*consistent_Point.x /= (num_consistent + 1.0f);
                     consistent_Point.y /= (num_consistent + 1.0f);
                     consistent_Point.z /= (num_consistent + 1.0f);
@@ -800,188 +972,4 @@ void RunFusion(std::string &dense_folder, std::string &outfolder,
 
     std::string ply_path = outfolder + "/ACMMP_model.ply";
     StoreColorPlyFileBinaryPointCloud (ply_path, PointCloud);
-}
-
-
-int main(int argc, char** argv)
-{
-    namespace po = boost::program_options;
-    std::string output_dir = "/ACMMP";
-    std::string fusion_dir = "/ACMMP";
-
-    float consistency_scalar = 0.3;
-    int num_consistent_thresh = 1;
-    int single_match_penalty = 0;
-
-    po::options_description desc("allowed options");
-    desc.add_options()
-    ("help,h", "produce help message")
-    ("prior,p", "runs the reconstruction from a provided prior")
-    ("fuse_thresh,f",
-            po::value<float>(&consistency_scalar),
-            "Sets the average inverse score threshold for fusion")
-    ("dense_folder",
-            po::value<std::string>(),
-            "The input folder for reconstruction")
-    ("multi_fusion",
-            po::value<std::string>(&fusion_dir)->implicit_value("/ACMMP"),
-            "Use information from a previous reconstruction during fusion of "
-            "invididual camera reconstructions")
-    ("force_fusion", "forces multi fusion, without prior")
-    ("output_dir", po::value<std::string>(&output_dir)->implicit_value("/ACCMP"),
-            "Output working directory name")
-    ("num_consistent_thresh", po::value<int>(&num_consistent_thresh),
-            "Number of points that must be consistent to be fused into the "
-            "final output pointcloud.")
-    ("single_match_penalty", po::value<int>(&single_match_penalty),
-            "An increase to the consistency threshold for matched "
-            "hypotheses that only matched over a single set")
-
-
-    ;
-    po::positional_options_description p;
-    p.add("dense_folder", -1);
-
-    po::variables_map vm;
-    po::store(po::command_line_parser(argc, argv).
-            options(desc).positional(p).run(), vm);
-    po::notify(vm);
-
-    if (vm.count("help")){
-        std::cout << desc << "\n";
-        return 1;
-    }
-
-    bool prior = (bool) vm.count("prior");
-    std::string dense_folder = vm["dense_folder"].as<std::string>();
-    std::vector<Problem> problems;
-    GenerateSampleList(dense_folder, problems);
-    size_t num_images = problems.size();
-    std::cout << "There are " << num_images << " problems needed to be processed!" << std::endl;
-
-    int max_num_downscale = ComputeMultiScaleSettings(dense_folder, problems);
-    pSampler sample_handler(dense_folder, num_images);
-
-    if (prior && !sample_handler.confirm_using_prior()){
-        std::cout << "Initialisation from a prior was requested, but no "
-                     "suitable priors were found." << std::endl;
-        return -1;
-    }
-    bool renamed_outdir = (bool)vm.count("output_dir");
-    std::string out_name;
-    if (prior && !renamed_outdir){
-        out_name = "/ACMMP_PRIOR";
-    }
-    else
-        out_name = output_dir;
-    std::string output_folder = dense_folder + out_name;
-    mkdir(output_folder.c_str(), 0777);
-
-
-    int flag = 0;
-    int geom_iterations = 2;
-    bool geom_consistency = false;
-    bool planar_prior = false;
-    bool hierarchy = false;
-    bool multi_geometry = false;
-
-    while (max_num_downscale >= 0) {
-        std::cout << "Scale: " << max_num_downscale << std::endl;
-
-        for (size_t i = 0; i < num_images; ++i) {
-            if (problems[i].num_downscale >= 0) {
-                problems[i].cur_image_size = problems[i].max_image_size / pow
-                         (2, problems[i].num_downscale);
-                problems[i].num_downscale--;
-            }
-        }
-
-        if (flag == 0) {
-            flag = 1;
-            geom_consistency = false;
-            planar_prior = true;
-
-            for (size_t i = 0; i < num_images; ++i) {
-                //if seeded, run ingest, and load the data to the pointer.
-                ProcessProblem(
-                        sample_handler,
-                        output_folder, dense_folder,
-                        problems, i, geom_consistency,
-                        planar_prior, hierarchy, multi_geometry, prior
-                        );
-            }
-            geom_consistency = true;
-            planar_prior = false;
-            for (int geom_iter = 0; geom_iter < geom_iterations; ++geom_iter) {
-                if (geom_iter == 0) {
-                    multi_geometry = false;
-                }
-                else {
-                    multi_geometry = true;
-                }
-                for (size_t i = 0; i < num_images; ++i) {
-                    ProcessProblem(
-                            sample_handler,
-                            output_folder, dense_folder,
-                            problems, i, geom_consistency,
-                            planar_prior, hierarchy, multi_geometry
-                           );
-                }
-            }
-        }
-        else {
-            std::cout << "Starting JBU" << std::endl;
-            for (size_t i = 0; i < num_images; ++i) {
-                JointBilateralUpsampling(dense_folder, output_folder, problems[i],
-                                        problems[i].cur_image_size);
-            }
-            hierarchy = true;
-            geom_consistency = false;
-            planar_prior = true;
-            for (size_t i = 0; i < num_images; ++i) {
-                ProcessProblem(
-                       sample_handler,
-                       output_folder, dense_folder,
-                       problems, i, geom_consistency, planar_prior, hierarchy
-                       );
-            }
-            hierarchy = false;
-            geom_consistency = true;
-            planar_prior = false;
-            for (int geom_iter = 0; geom_iter < geom_iterations; ++geom_iter) {
-                if (geom_iter == 0) {
-                    multi_geometry = false;
-                }
-                else {
-                    multi_geometry = true;
-                }
-                for (size_t i = 0; i < num_images; ++i) {
-                    ProcessProblem(
-                           sample_handler,
-                           output_folder, dense_folder,
-                           problems, i, geom_consistency,
-                           planar_prior, hierarchy, multi_geometry);
-                }
-            }
-        }
-        max_num_downscale--;
-    }
-    geom_consistency = true;
-    bool multi_aware = (bool)vm.count("multi_fusion");
-    bool force_fusion = (bool)vm.count("force_fusion");
-    std::string fusion_folder = dense_folder + fusion_dir;
-    if ((prior && multi_aware) | force_fusion){
-        RunPriorAwareFusion(
-                dense_folder, output_folder, fusion_folder, problems,
-                geom_consistency,
-                consistency_scalar, num_consistent_thresh, single_match_penalty
-                );
-    }
-    else{
-        RunFusion(
-                dense_folder, output_folder, problems, geom_consistency,
-                consistency_scalar, num_consistent_thresh
-                );
-    }
-    return 0;
 }
