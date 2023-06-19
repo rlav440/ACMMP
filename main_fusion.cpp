@@ -64,13 +64,7 @@ int main(int argc, char** argv)
     std::string output_folder = dense_folder + out_name;
     mkdir(output_folder.c_str(), 0777);
 
-
-    int flag = 0;
-    int geom_iterations = 2;
     bool geom_consistency = false;
-    bool planar_prior = false;
-    bool hierarchy = false;
-    bool multi_geometry = false;
     bool multi_aware = (bool)vm.count("multi_fusion");
     bool force_fusion = (bool)vm.count("force_fusion");
 

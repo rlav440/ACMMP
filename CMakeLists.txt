@@ -28,10 +28,13 @@ if (OPENMP_FOUND)
     set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
 endif()
 
-add_library(
+cuda_add_library(
         ${PROJECT_NAME} SHARED
+        ACMMP.h
+        ACMMP.cpp
+        ACMMP.cu
+        acmmp_definitions.h
         acmmp_definitions.cpp
-        main_fusion.cpp
 )
 
 # For compilation ...
@@ -46,11 +49,6 @@ target_link_libraries(${PROJECT_NAME}
 cuda_add_executable(
         ACMMP
         main_ACMMP.cpp
-        acmmp_definitions.h
-        ACMMP.h
-        ACMMP.cpp
-        ACMMP.cu
-        acmmp_definitions.cpp
         )
 
 target_link_libraries(
@@ -60,7 +58,5 @@ target_link_libraries(
 add_executable(
         fuse_data
         main_fusion.cpp
-        acmmp_definitions.cpp
-        acmmp_definitions.h
 )
 target_link_libraries(fuse_data ${PROJECT_NAME})

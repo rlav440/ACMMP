@@ -1,5 +1,4 @@
 #ifndef _MAIN_H_
-#define _MAIN_H_
 
 #include "opencv2/calib3d/calib3d.hpp"
 #include "opencv2/imgproc/imgproc.hpp"
@@ -84,7 +83,7 @@ private:
 
 
 void GenerateSampleList(const std::string &dense_folder, std::vector<Problem>
-        &problems);
+&problems);
 
 int ComputeMultiScaleSettings(const std::string &dense_folder, std::vector<Problem> &problems);
 
@@ -92,22 +91,25 @@ void ProcessProblem(
         pSampler &pSample, const std::string output_folder,
         const std::string &dense_folder, const std::vector<Problem> &problems, const int idx,
         bool geom_consistency, bool planar_prior, bool hierarchy, bool multi_geometry=false, bool seeded=false
-        );
+);
 
 void JointBilateralUpsampling(
         const std::string &dense_folder,
         const std::string &output_folder,
         const Problem &problem, int acmmp_size
-        );
+);
 
-void RunFusion(std::string &dense_folder, std::string &outfolder,
-               const std::vector<Problem> &problems, bool geom_consistency,
-               float consistency_scalar, int con_num_thresh);
+void RunFusion(
+        std::string &dense_folder, std::string &outfolder, const std::vector<Problem> &problems,
+        bool geom_consistency, float consistency_scalar, int con_num_thresh,
+        const std::string &mask_folder =" ");
 
 void RunPriorAwareFusion(
         std::string &dense_folder, std::string &outfolder,
         std::string &fusion_folder,
         const std::vector<Problem> &problems, bool geom_consistency, float
         consistency_scalar, int num_consistent_thresh,
-        int single_match_penalty = 1);
-#endif // _MAIN_H_
+        int single_match_penalty = 1,
+        const std::string &mask_folder = " ");
+#define _MAIN_H_
+#endif
