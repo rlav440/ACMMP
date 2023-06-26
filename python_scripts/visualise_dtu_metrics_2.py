@@ -76,8 +76,9 @@ except:
     pass
 
 
-# np.save( 'old_method_evaluation_data.npy', data_array,)
-# data_array = np.load("old_method_evaluation_data.npy")
+np.save( 'good_evaluation_data.npy', data_array,)
+raise ValueError('finished evaluating')
+data_array = np.load("old_method_evaluation_data.npy")
 def draw_data(data, title, **kwargs):
 
     data = data[~np.any(np.isnan(data), axis=1)]

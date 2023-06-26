@@ -1,7 +1,6 @@
+
 #include "acmmp_definitions.h"
 #include "ACMMP.h"
-#include "boost/program_options.hpp"
-
 //#define DEBUG
 
 
@@ -576,7 +575,9 @@ void RunPriorAwareFusion(
         std::string &fusion_folder,
         const std::vector<Problem> &problems, bool geom_consistency, float
         consistency_scalar, int num_consistent_thresh,
-        int single_match_penalty)
+        int single_match_penalty,
+        const std::string &mask_folder
+        )
 {
     size_t num_images = problems.size();
     std::string image_folder = dense_folder + std::string("/images");
@@ -652,7 +653,16 @@ void RunPriorAwareFusion(
         prior_depths.push_back(prior_depth);
         prior_normals.push_back(prior_normal);
 
+
         cv::Mat mask = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC1);
+        if (!(mask_folder == " ")){
+            std::stringstream mask_path;
+            mask_path << mask_folder << "/" << std::setw(8) << std::setfill
+            ('0') << problems[i].ref_image_id << ".png";
+            cv::Mat_<cv::Vec3b> mask_image = cv::imread (
+                    mask_path.str(), -1);
+            mask = mask_image < 128; // prebake the mask with this point.
+        }
         masks.push_back(mask);
     }
 
@@ -815,15 +825,15 @@ void RunPriorAwareFusion(
     StoreColorPlyFileBinaryPointCloud (ply_path, PointCloud);
 }
 
-
-
-
 void RunFusion(std::string &dense_folder, std::string &outfolder,
                const std::vector<Problem> &problems, bool geom_consistency,
-               float consistency_scalar, int con_num_thresh)
+               float consistency_scalar, int con_num_thresh,
+               const std::string &image_dir,
+               const std::string &mask_folder
+               )
 {
     size_t num_images = problems.size();
-    std::string image_folder = dense_folder + std::string("/images");
+    std::string image_folder = dense_folder + image_dir;
     std::string cam_folder = dense_folder + std::string("/cams");
 
     std::vector<cv::Mat> images;
@@ -871,6 +881,33 @@ void RunFusion(std::string &dense_folder, std::string &outfolder,
         depths.push_back(depth);
         normals.push_back(normal);
         cv::Mat mask = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC1);
+
+        if (!(mask_folder == " ")){
+            std::stringstream mask_path;
+            mask_path << mask_folder << "/" << std::setw(8) << std::setfill
+                    ('0') << problems[i].ref_image_id << ".png";
+            cv::Mat mask_image = cv::imread (
+                    mask_path.str(), -1);
+
+            std::cout <<mask_image.rows << std::endl;
+            std::cout <<depth.rows << std::endl;
+            if (mask_image.empty()){
+                std::cout << "Couldn't find mask images" << std::endl;
+            }
+            std::cout << "With a depth mask" << std::endl;
+            cv::Mat temp_mask;
+            cv::resize(mask_image, temp_mask, cv::Size(depth.cols, depth.rows));
+            std::cout<<temp_mask.rows << std::endl;
+            mask = (temp_mask < 128)/255;
+//            cv::namedWindow("Test_mask", cv::WINDOW_NORMAL);
+//            cv::resizeWindow("Test_mask", 640, 480);
+//            cv::imshow("Test_mask", mask);
+//            cv::waitKey(-1);
+//            std::cout << mask.type() << std::endl;
+//            std::cout << mask.at<uchar>(0,0)<< std::endl;
+            // prebake the mask with this point.
+        }
+
         masks.push_back(mask);
     }
 
@@ -963,7 +1000,9 @@ void RunFusion(std::string &dense_folder, std::string &outfolder,
                     for (int j = 0; j < num_ngb; ++j) {
                         if (used_list[j].x == -1)
                             continue;
-                        masks[image_id_2_index[problems[i].src_image_ids[j]]].at<uchar>(used_list[j].y, used_list[j].x) = 1;
+                        masks[
+                            image_id_2_index[problems[i].src_image_ids[j]]
+                        ].at<uchar>(used_list[j].y, used_list[j].x) = 1;
                     }
                 }
             }

@@ -100,9 +100,11 @@ void JointBilateralUpsampling(
 );
 
 void RunFusion(
-        std::string &dense_folder, std::string &outfolder, const std::vector<Problem> &problems,
-        bool geom_consistency, float consistency_scalar, int con_num_thresh,
-        const std::string &mask_folder =" ");
+        std::string &dense_folder, std::string &outfolder,
+        const std::vector<Problem> &problems, bool geom_consistency,
+        float consistency_scalar, int con_num_thresh,
+        const std::string &image_dir = "/images",
+        const std::string &mask_folder = " ");
 
 void RunPriorAwareFusion(
         std::string &dense_folder, std::string &outfolder,
@@ -111,5 +113,7 @@ void RunPriorAwareFusion(
         consistency_scalar, int num_consistent_thresh,
         int single_match_penalty = 1,
         const std::string &mask_folder = " ");
+
 #define _MAIN_H_
+
 #endif

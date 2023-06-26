@@ -2,7 +2,6 @@
 // Created by rlav440 on 6/18/23.
 //
 #include "acmmp_definitions.h"
-#include "ACMMP.h"
 #include "boost/program_options.hpp"
 
 int main(int argc, char** argv)
@@ -10,6 +9,8 @@ int main(int argc, char** argv)
     namespace po = boost::program_options;
     std::string output_dir = "/ACMMP";
     std::string fusion_dir = "/ACMMP";
+    std::string mask_dir = " ";
+    std::string image_override = "/images";
 
     float consistency_scalar = 0.3;
     int num_consistent_thresh = 1;
@@ -30,12 +31,15 @@ int main(int argc, char** argv)
             ("force_fusion", "forces multi fusion, without prior")
             ("num_consistent_thresh", po::value<int>(&num_consistent_thresh),
              "Number of points that must be consistent to be fused into the "
-             "final output pointcloud.")
+             "final output point cloud.")
             ("single_match_penalty", po::value<int>(&single_match_penalty),
              "An increase to the consistency threshold for matched "
              "hypotheses that only matched over a single set")
-
-
+            ("mask_dir", po::value<std::string>(&mask_dir),
+                    "Directory of boolean masks (0, 255) for masking fusion")
+            ("image_override", po::value<std::string>(&image_override),
+             "A new directory to pull texture information from, rather than "
+             "the default images when fusing.")
             ;
     po::positional_options_description p;
     p.add("dense_folder", -1);
@@ -53,6 +57,9 @@ int main(int argc, char** argv)
     bool prior = (bool) vm.count("prior");
     std::string dense_folder = vm["dense_folder"].as<std::string>();
     std::vector<Problem> problems;
+    GenerateSampleList(dense_folder, problems);
+    size_t num_images = problems.size();
+    std::cout << "There are " << num_images << " problems needed to be processed!" << std::endl;
 
     bool renamed_outdir = (bool)vm.count("output_dir");
     std::string out_name;
@@ -73,13 +80,15 @@ int main(int argc, char** argv)
         RunPriorAwareFusion(
                 dense_folder, output_folder, fusion_folder, problems,
                 geom_consistency,
-                consistency_scalar, num_consistent_thresh, single_match_penalty
+                consistency_scalar, num_consistent_thresh, single_match_penalty,
+                image_override
         );
     }
     else{
         RunFusion(
                 dense_folder, output_folder, problems, geom_consistency,
-                consistency_scalar, num_consistent_thresh
+                consistency_scalar, num_consistent_thresh,
+                image_override,  mask_dir
         );
     }
     return 0;
