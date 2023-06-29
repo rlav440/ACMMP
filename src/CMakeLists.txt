@@ -2,11 +2,15 @@ cmake_minimum_required (VERSION 2.8)
 project (ACMMP_recon)
 
 
-set(CUDA_TOOLKIT_ROOT_DIR "/usr/local/cuda-8.0")
+set(CUDA_TOOLKIT_ROOT_DIR "/usr/local/cuda")
 find_package(CUDA 6.0 REQUIRED ) # For Cuda Managed Memory and c++11
 find_package(OpenCV REQUIRED )
 find_package(Boost COMPONENTS program_options REQUIRED)
 
+
+if (NOT(CMAKE_BUILD_TYPE))
+    SET(CMAKE_BUILD_TYPE Release)
+endif()
 
 include_directories(${OpenCV_INCLUDE_DIRS} ${Boost_INCLUDE_DIR})
 include_directories(.)
