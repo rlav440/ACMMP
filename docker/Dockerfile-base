@@ -1,0 +1,21 @@
+# ----------------------------------
+# Dockerfile For Base ACMMP Build Image
+# ** devel needed to have nvcc inside container ** 
+# ----------------------------------
+
+# FROM nvidia/cuda:12.1.1-devel-ubuntu20.04 
+FROM nvidia/cuda:11.4.0-devel-ubuntu18.04
+
+
+# Ensures apt installs are non-interactive
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Miscellaneous Components & libopencv & libboost & python 
+RUN apt-get update --fix-missing && \
+apt-get install -y --no-install-recommends \
+apt-utils git build-essential cmake \
+software-properties-common libopencv-dev libboost-all-dev && \
+add-apt-repository ppa:deadsnakes/ppa && \
+apt-get update && \
+apt-get install -y python3.8 python3-pip
+
