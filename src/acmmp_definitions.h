@@ -31,6 +31,19 @@
 #define MAX_IMAGES 256
 #define JBU_NUM 2
 
+struct Problem_config{
+    std::string output_dir = "/ACMMP";
+    std::string fusion_dir = "/ACMMP";
+    std::string mask_dir = " ";
+    std::string image_dir = "/images";
+
+    float consistency_scalar = 0.3;
+    int num_consistent_thresh = 1;
+    int single_match_penalty = 0;
+
+    int max_image_size = 6400;
+};
+
 struct Camera {
     float K[9];
     float R[9];
@@ -44,9 +57,9 @@ struct Camera {
 struct Problem {
     int ref_image_id;
     std::vector<int> src_image_ids;
-    int max_image_size = 3200;
+    int max_image_size = 6400;
     int num_downscale = 0;
-    int cur_image_size = 3200;
+    int cur_image_size = 6400;
 };
 
 struct Triangle {

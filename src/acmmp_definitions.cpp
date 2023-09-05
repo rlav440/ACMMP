@@ -1,7 +1,7 @@
 
 #include "acmmp_definitions.h"
 #include "ACMMP.h"
-//#define DEBUG
+#define DEBUG
 
 
 
@@ -850,7 +850,7 @@ void RunFusion(std::string &dense_folder, std::string &outfolder,
     std::map<int, int> image_id_2_index;
 
     for (size_t i = 0; i < num_images; ++i) {
-        std::cout << "Reading image " << std::setw(8) << std::setfill('0') << i << "..." << std::endl;
+        std::cout << "Reading image " << std::setw(8) << std::setfill('0') << i << "...";
         image_id_2_index[problems[i].ref_image_id] = i;
         std::stringstream image_path;
         image_path << image_folder << "/" << std::setw(8) << std::setfill('0') << problems[i].ref_image_id << ".jpg";
@@ -863,6 +863,7 @@ void RunFusion(std::string &dense_folder, std::string &outfolder,
         result_path << outfolder << "/2333_" << std::setw(8) << std::setfill('0') <<
                     problems[i].ref_image_id;
         std::string result_folder = result_path.str();
+//        std::cout << result_folder << std::endl;
         std::string suffix = "/depths.dmb";
         if (geom_consistency) {
             suffix = "/depths_geom.dmb";
@@ -884,20 +885,20 @@ void RunFusion(std::string &dense_folder, std::string &outfolder,
 
         if (!(mask_folder == " ")){
             std::stringstream mask_path;
-            mask_path << mask_folder << "/" << std::setw(8) << std::setfill
+            mask_path << dense_folder<< "/" << mask_folder << "/" <<
+            std::setw(8)
+            << std::setfill
                     ('0') << problems[i].ref_image_id << ".png";
+//            std::cout << mask_path.str() << std::endl;
             cv::Mat mask_image = cv::imread (
                     mask_path.str(), -1);
 
-            std::cout <<mask_image.rows << std::endl;
-            std::cout <<depth.rows << std::endl;
             if (mask_image.empty()){
-                std::cout << "Couldn't find mask images" << std::endl;
+                std::cout << " Couldn't find mask images" << std::endl;
             }
-            std::cout << "With a depth mask" << std::endl;
+            std::cout << " with a depth mask";
             cv::Mat temp_mask;
             cv::resize(mask_image, temp_mask, cv::Size(depth.cols, depth.rows));
-            std::cout<<temp_mask.rows << std::endl;
             mask = (temp_mask < 128)/255;
 //            cv::namedWindow("Test_mask", cv::WINDOW_NORMAL);
 //            cv::resizeWindow("Test_mask", 640, 480);
@@ -909,27 +910,46 @@ void RunFusion(std::string &dense_folder, std::string &outfolder,
         }
 
         masks.push_back(mask);
+        std::cout << '\n';
     }
 
     std::vector<PointList> PointCloud;
     PointCloud.clear();
 
     // change this to use an ACMMP thresholded value
-
     for (size_t i = 0; i < num_images; ++i) {
+        int num_approved = 0;
+
         std::cout << "Fusing image " << std::setw(8) << std::setfill('0') << i << "..." << std::endl;
         const int cols = depths[i].cols;
         const int rows = depths[i].rows;
         int num_ngb = problems[i].src_image_ids.size();
+
+        float depth_max = cameras[i].depth_max;
+        cv::Mat display;
+        depths[i].convertTo(display, CV_8U, 255/depth_max);
+        cv::resize(display, display, cv::Size(960,540));
+        cv::imshow("Depth Image", display);
+        cv::waitKey(1);
+
+
         std::vector<int2> used_list(num_ngb, make_int2(-1, -1));
+
+        cv::Mat approved(rows, cols, CV_8U, cv::Scalar(0));
+
+
+
+        int fuck_counter = 0;
+
         for (int r =0; r < rows; ++r) {
             for (int c = 0; c < cols; ++c) {
                 if (masks[i].at<uchar>(r, c) == 1)
                     continue;
                 float ref_depth = depths[i].at<float>(r, c);
+                if (ref_depth > 10) fuck_counter ++;
                 cv::Vec3f ref_normal = normals[i].at<cv::Vec3f>(r, c);
 
-                if (ref_depth <= 0.0)
+                if (ref_depth <= 0.0 || ref_depth >= depth_max)
                     continue;
 
                 float3 PointX = Get3DPointonWorld(c, r, ref_depth, cameras[i]);
@@ -965,6 +985,7 @@ void RunFusion(std::string &dense_folder, std::string &outfolder,
                         float angle = GetAngle(ref_normal, src_normal);
 
                         if (reproj_error < 2.0f && relative_depth_diff < 0.01f && angle < 0.174533f) {
+
                             /* consistent_Point.x += tmp_X.x;
                             consistent_Point.y += tmp_X.y;
                             consistent_Point.z += tmp_X.z;
@@ -986,6 +1007,7 @@ void RunFusion(std::string &dense_folder, std::string &outfolder,
                 if (num_consistent >= con_num_thresh && (dynamic_consistency >
                                                          consistency_scalar *
                                                          num_consistent)) {
+                    num_approved += 1;
                     /*consistent_Point.x /= (num_consistent + 1.0f);
                     consistent_Point.y /= (num_consistent + 1.0f);
                     consistent_Point.z /= (num_consistent + 1.0f);
@@ -1003,10 +1025,17 @@ void RunFusion(std::string &dense_folder, std::string &outfolder,
                         masks[
                             image_id_2_index[problems[i].src_image_ids[j]]
                         ].at<uchar>(used_list[j].y, used_list[j].x) = 1;
+                        approved.at<uint8_t>(used_list[j].y, used_list[j].x) = 255;
                     }
                 }
             }
         }
+        std::cout << "approved " << num_approved << " pts" << std::endl;
+        if(fuck_counter>0) std::cout << "found " << fuck_counter << " fucks \n";
+        std::stringstream debug_image_path;
+        debug_image_path << dense_folder << "/approved_pixels_cam_" << i << ""
+                                                                          ".png";
+        cv::imwrite(debug_image_path.str(), approved);
     }
 
     std::string ply_path = outfolder + "/ACMMP_model.ply";

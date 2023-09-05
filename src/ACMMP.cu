@@ -1,6 +1,6 @@
 #include "ACMMP.h"
 
-//#define DEBUG
+#define DEBUG
 
 #define mul4(v,k) { \
     v->x = v->x * k; \
@@ -1433,7 +1433,8 @@ void ACMMP::RunPatchMatch()
     }
 
 #ifdef DEBUG
-    visualise_cuda_data(plane_hypotheses_cuda, cameras[0], 1, "Post Iteration");
+    visualise_cuda_data(plane_hypotheses_cuda, cameras[0], 1, "Post "
+                                                               "Iteration");
 #endif
 
     GetDepthandNormal<<<grid_size_randinit, block_size_randinit>>>(
