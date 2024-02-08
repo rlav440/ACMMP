@@ -141,7 +141,7 @@ if run_acmmp == True:
     # path to acmmp binary
     binary_path = "/ACMMP_docker_build/ACMMP"
     # Run the subprocess with the specified flags, values, and file path
-    subprocess.run([binary_path, *flags, acmmp_output_dir], check=True)
+    subprocess.run([binary_path, *flags], check=True)
 
 
 

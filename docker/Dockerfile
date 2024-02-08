@@ -6,7 +6,7 @@
 
 # FROM acmmp/full:cuda-11.4.0-devel
 # FROM acmmp/feature-dev:cuda-11.4.0-devel
-FROM acmmp/base:cuda-11.4.0-devel
+FROM acmmp/base:cuda-11.3.1-devel
 
 # Set working directory inside container from which other commands will run at
 WORKDIR /ACMMP_docker_build
@@ -56,7 +56,7 @@ apt-get autoremove -y
 ENTRYPOINT ["python3", "/acmmp_docker.py"]
 
 # Default arguments for the entrypoint command
-CMD ["/acmmp_dir" ]
+CMD ["--dense_folder", "/acmmp_dir/" ]
 
 
 # # DEBUG

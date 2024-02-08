@@ -4,7 +4,7 @@ project (ACMMP_recon)
 
 set(CUDA_TOOLKIT_ROOT_DIR "/usr/local/cuda")
 find_package(CUDA 6.0 REQUIRED ) # For Cuda Managed Memory and c++11
-find_package(OpenCV REQUIRED )
+find_package(OpenCV 4.0 REQUIRED )
 find_package(Boost COMPONENTS program_options REQUIRED)
 
 
@@ -12,11 +12,12 @@ if (NOT(CMAKE_BUILD_TYPE))
     SET(CMAKE_BUILD_TYPE Release)
 endif()
 
+
 include_directories(${OpenCV_INCLUDE_DIRS} ${Boost_INCLUDE_DIR})
 include_directories(.)
 
 # set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS};-O3 --use_fast_math --maxrregcount=128 --ptxas-options=-v -std=c++11 --compiler-options -Wall -gencode arch=compute_86,code=sm_86)
-set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS};-O3 --use_fast_math --maxrregcount=128 --ptxas-options=-v -std=c++11 --compiler-options -Wall -gencode arch=compute_60,code=[sm_60,compute_60] -gencode arch=compute_61,code=[sm_61,compute_61] -gencode arch=compute_70,code=[sm_70,compute_70] -gencode arch=compute_75,code=[sm_75,compute_75] -gencode arch=compute_80,code=[sm_80,compute_80] -gencode arch=compute_86,code=[sm_86,compute_86] -gencode arch=compute_87,code=[sm_87,compute_87])
+set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS};-O3 --use_fast_math --maxrregcount=128 --ptxas-options=-v -std=c++11 --compiler-options -Wall -gencode arch=compute_60,code=[sm_60,compute_60] -gencode arch=compute_61,code=[sm_61,compute_61] -gencode arch=compute_70,code=[sm_70,compute_70] -gencode arch=compute_75,code=[sm_75,compute_75] -gencode arch=compute_80,code=[sm_80,compute_80] -gencode arch=compute_86,code=[sm_86,compute_86] )
 if(CMAKE_COMPILER_IS_GNUCXX)
     add_definitions(-std=c++11)
     add_definitions(-pthread)

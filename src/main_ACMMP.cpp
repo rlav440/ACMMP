@@ -86,12 +86,13 @@ int main(int argc, char** argv)
     mkdir(output_folder.c_str(), 0777);
 
 
-    int flag = 0;
+    int start_flag = 0;
     int geom_iterations = 2;
     bool geom_consistency = false;
     bool planar_prior = false;
     bool hierarchy = false;
     bool multi_geometry = false;
+    bool cross_camera_pollination = false;
 
     while (max_num_downscale >= 0) {
         std::cout << "Scale: " << max_num_downscale << std::endl;
@@ -104,8 +105,8 @@ int main(int argc, char** argv)
             }
         }
 
-        if (flag == 0) {
-            flag = 1;
+        if (start_flag == 0) {
+            start_flag = 1;
             geom_consistency = false;
             planar_prior = true;
 
@@ -170,6 +171,16 @@ int main(int argc, char** argv)
                             problems, i, geom_consistency,
                             planar_prior, hierarchy, multi_geometry);
                 }
+                cross_camera_pollination = true;
+
+                for (size_t i = 0; i < num_images; ++i) {
+                    ProcessProblem(
+                            sample_handler,
+                            output_folder, dense_folder,
+                            problems, i, geom_consistency,
+                            planar_prior, hierarchy, multi_geometry);
+                }
+                cross_camera_pollination = false;
             }
         }
         max_num_downscale--;

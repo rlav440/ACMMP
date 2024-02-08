@@ -517,8 +517,8 @@ void ACMMP::SetPlanarPrior(std::unique_ptr<float4> prior) {
     cv::Mat depths_vis;
     depth_display.convertTo(depths_vis, CV_8U, 255.f/800);
 
-    cv::imshow("unloaded depth", depths_vis);
-    cv::waitKey(-1);
+//    cv::imshow("unloaded depth", depths_vis);
+//    cv::waitKey(-1);
 #endif
 }
 
@@ -960,6 +960,8 @@ float ACMMP::GetDepthFromPlaneParam(const float4 plane_hypothesis, const int x, 
 Camera ACMMP::GetCamera(const int index){
     return cameras[index];
 }
+
+
 
 void JBUAddImageToTextureFloatGray ( std::vector<cv::Mat_<float>>  &imgs, cudaTextureObject_t texs[], cudaArray *cuArray[], const int &numSelViews)
 {

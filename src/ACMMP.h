@@ -19,6 +19,8 @@ void RunJBU(const cv::Mat_<float>  &scaled_image_float, const cv::Mat_<float> &s
             const std::string &dense_folder, const std::string &output_folder,
             const Problem &problem);
 
+
+
 #define CUDA_SAFE_CALL(error) CudaSafeCall(error, __FILE__, __LINE__)
 #define CUDA_CHECK_ERROR() CudaCheckError(__FILE__, __LINE__)
 
@@ -31,9 +33,9 @@ struct cudaTextureObjects {
 
 struct PatchMatchParams {
     int max_iterations = 2;
-    int patch_size = 11;
+    int patch_size = 21;
     int num_images = 5;
-    int max_image_size=3200;
+    int max_image_size =  10000;
     int radius_increment = 2;
     float sigma_spatial = 5.0f;
     float sigma_color = 3.0f;
@@ -76,6 +78,8 @@ public:
     int GetReferenceImageHeight();
     cv::Mat GetReferenceImage();
     float4 GetPlaneHypothesis(const int index);
+
+    void CrossPollinateCams(const int ref, const int src);
 
     Camera GetCamera(const int index);
 

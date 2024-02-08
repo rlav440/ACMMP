@@ -15,7 +15,7 @@ cd ..
 # docker build --no-cache -t acmmp/full:cuda-11.4.0-devel -f docker/Dockerfile-base .
 # docker build --no-cache -t acmmp/feature-dev:cuda-11.4.0-devel -f docker/Dockerfile-base .
 
-docker build --no-cache -t acmmp/base:cuda-11.4.0-devel -f docker/Dockerfile-base .
+docker build --no-cache -t acmmp/base:cuda-11.3.1-devel -f docker/Dockerfile-base .
 
 
 

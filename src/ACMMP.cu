@@ -1,6 +1,6 @@
 #include "ACMMP.h"
 
-#define DEBUG
+//#define DEBUG
 
 #define mul4(v,k) { \
     v->x = v->x * k; \
@@ -392,7 +392,6 @@ __device__ float ComputeBilateralNCC(const cudaTextureObject_t ref_image, const 
                 const float ref_pix = tex2D<float>(ref_image, ref_pt.x + 0.5f, ref_pt.y + 0.5f);
                 float2 src_pt = ComputeCorrespondingPoint(H, ref_pt);
                 const float src_pix = tex2D<float>(src_image, src_pt.x + 0.5f, src_pt.y + 0.5f);
-
                 float weight = ComputeBilateralWeight(i, j, ref_pix, ref_center_pix, params.sigma_spatial, params.sigma_color);
 
                 sum_ref_row += weight * ref_pix;
@@ -783,8 +782,77 @@ __device__ void PlaneHypothesisRefinement(const cudaTextureObject_t *images, con
     }
 }
 
-__device__ void CheckerboardPropagation(const cudaTextureObject_t *images, const cudaTextureObject_t *depths, const Camera *cameras, float4 *plane_hypotheses, float *costs, float *pre_costs, curandState *rand_states, unsigned int *selected_views, float4 *prior_planes, unsigned int *plane_masks, const int2 p, const PatchMatchParams params, const int iter)
-{
+__device__ void PlanarPriorCostAdjust(const Camera *cameras, float4
+*plane_hypotheses,
+                           float *costs, unsigned int *selected_views,
+                           const float4 *prior_planes,
+                           const unsigned int *plane_masks, const int2 &p,
+                           const PatchMatchParams &params, const int center,
+                           const bool *flag, const int *positions,
+                           unsigned int temp_selected_views,
+                           const float *final_costs, const int min_cost_idx,
+                           float cost_now, float &depth_now,
+                           float &restricted_cost) {
+    float restricted_final_costs[8] = {0.0f};
+    float gamma = 0.5f;
+    float depth_sigma = (params.depth_max - params.depth_min) / 64.0f;
+    float two_depth_sigma_squared = 2 * depth_sigma * depth_sigma;
+    float angle_sigma = M_PI * (5.0f / 180.0f);
+    float two_angle_sigma_squared = 2 * angle_sigma * angle_sigma;
+    float depth_prior = ComputeDepthfromPlaneHypothesis(cameras[0], prior_planes[center], p);
+    float beta = 0.18f;
+
+    if (plane_masks[center] > 0) {
+        for (int i = 0; i < 8; i++) {
+            if (flag[i]) {
+                float depth_now = ComputeDepthfromPlaneHypothesis(cameras[0], plane_hypotheses[positions[i]], p);
+                float depth_diff = depth_now - depth_prior;
+                float angle_cos = Vec3DotVec3(prior_planes[center], plane_hypotheses[positions[i]]);
+                float angle_diff = acos(angle_cos);
+                float prior = gamma + exp(- depth_diff * depth_diff / two_depth_sigma_squared) * exp(- angle_diff * angle_diff / two_angle_sigma_squared);
+                restricted_final_costs[i] = exp(-final_costs[i] * final_costs[i] / beta) * prior;
+            }
+        }
+        const int max_cost_idx = FindMaxCostIndex(restricted_final_costs, 8);
+
+        float restricted_cost_now = 0.0f;
+        float depth_now = ComputeDepthfromPlaneHypothesis(cameras[0], plane_hypotheses[center], p);
+        float depth_diff = depth_now - depth_prior;
+        float angle_cos = Vec3DotVec3(prior_planes[center], plane_hypotheses[center]);
+        float angle_diff = acos(angle_cos);
+        float prior = gamma + exp(- depth_diff * depth_diff / two_depth_sigma_squared) * exp(- angle_diff * angle_diff / two_angle_sigma_squared);
+        restricted_cost_now = exp(-cost_now * cost_now / beta) * prior;
+
+        if (flag[max_cost_idx]) {
+            float depth_before = ComputeDepthfromPlaneHypothesis(cameras[0], plane_hypotheses[positions[max_cost_idx]], p);
+
+            if (depth_before >= params.depth_min && depth_before <= params.depth_max && restricted_final_costs[max_cost_idx] > restricted_cost_now) {
+                depth_now   = depth_before;
+                plane_hypotheses[center] = plane_hypotheses[positions[max_cost_idx]];
+                costs[center] = final_costs[max_cost_idx];
+                restricted_cost = restricted_final_costs[max_cost_idx];
+                selected_views[center] = temp_selected_views;
+            }
+        }
+    }
+    else if (flag[min_cost_idx]) {
+        float depth_before = ComputeDepthfromPlaneHypothesis(cameras[0], plane_hypotheses[positions[min_cost_idx]], p);
+
+        if (depth_before >= params.depth_min && depth_before <= params.depth_max && final_costs[min_cost_idx] < cost_now) {
+            depth_now = depth_before;
+            plane_hypotheses[center] = plane_hypotheses[positions[min_cost_idx]];
+            costs[center] = final_costs[min_cost_idx];
+        }
+    }
+}
+
+__device__ void CheckerboardPropagation(
+        const cudaTextureObject_t *images, const cudaTextureObject_t
+        *depths, const Camera *cameras, float4 *plane_hypotheses,
+        float *costs, float *pre_costs, curandState *rand_states,
+        unsigned int *selected_views, float4 *prior_planes,
+        unsigned int *plane_masks, const int2 p,
+        const PatchMatchParams params, const int iter) {
     int width = cameras[0].width;
     int height = cameras[0].height;
     if (p.x >= width || p.y >= height) {
@@ -803,7 +871,8 @@ __device__ void CheckerboardPropagation(const cudaTextureObject_t *images, const
 
     // Adaptive Checkerboard Sampling
     float cost_array[8][32] = {2.0f};
-    // 0 -- up_near, 1 -- up_far, 2 -- down_near, 3 -- down_far, 4 -- left_near, 5 -- left_far, 6 -- right_near, 7 -- right_far
+    // 0 -- up_near, 1 -- up_far, 2 -- down_near, 3 -- down_far,
+    // 4 -- left_near,5 -- left_far, 6 -- right_near, 7 -- right_far
     bool flag[8] = {false};
     int num_valid_pixels = 0;
 
@@ -826,7 +895,8 @@ __device__ void CheckerboardPropagation(const cudaTextureObject_t *images, const
             }
         }
         up_far = costMinPoint;
-        ComputeMultiViewCostVector(images, cameras, p, plane_hypotheses[up_far], cost_array[1], params);
+        ComputeMultiViewCostVector(images, cameras, p, plane_hypotheses[up_far],
+                                   cost_array[1], params);
     }
 
     // dwon_far
@@ -845,7 +915,9 @@ __device__ void CheckerboardPropagation(const cudaTextureObject_t *images, const
             }
         }
         down_far = costMinPoint;
-        ComputeMultiViewCostVector(images, cameras, p, plane_hypotheses[down_far], cost_array[3], params);
+        ComputeMultiViewCostVector(images, cameras, p,
+                                   plane_hypotheses[down_far], cost_array[3],
+                                   params);
     }
 
     // left_far
@@ -864,7 +936,9 @@ __device__ void CheckerboardPropagation(const cudaTextureObject_t *images, const
             }
         }
         left_far = costMinPoint;
-        ComputeMultiViewCostVector(images, cameras, p, plane_hypotheses[left_far], cost_array[5], params);
+        ComputeMultiViewCostVector(images, cameras, p,
+                                   plane_hypotheses[left_far], cost_array[5],
+                                   params);
     }
 
     // right_far
@@ -883,7 +957,9 @@ __device__ void CheckerboardPropagation(const cudaTextureObject_t *images, const
             }
         }
         right_far = costMinPoint;
-        ComputeMultiViewCostVector(images, cameras, p, plane_hypotheses[right_far], cost_array[7], params);
+        ComputeMultiViewCostVector(images, cameras, p,
+                                   plane_hypotheses[right_far], cost_array[7],
+                                   params);
     }
 
     // up_near
@@ -909,7 +985,9 @@ __device__ void CheckerboardPropagation(const cudaTextureObject_t *images, const
             }
         }
         up_near = costMinPoint;
-        ComputeMultiViewCostVector(images, cameras, p, plane_hypotheses[up_near], cost_array[0], params);
+        ComputeMultiViewCostVector(images, cameras, p,
+                                   plane_hypotheses[up_near], cost_array[0],
+                                   params);
     }
 
     // down_near
@@ -935,7 +1013,9 @@ __device__ void CheckerboardPropagation(const cudaTextureObject_t *images, const
             }
         }
         down_near = costMinPoint;
-        ComputeMultiViewCostVector(images, cameras, p, plane_hypotheses[down_near], cost_array[2], params);
+        ComputeMultiViewCostVector(images, cameras, p,
+                                   plane_hypotheses[down_near], cost_array[2],
+                                   params);
     }
 
     // left_near
@@ -961,7 +1041,9 @@ __device__ void CheckerboardPropagation(const cudaTextureObject_t *images, const
             }
         }
         left_near = costMinPoint;
-        ComputeMultiViewCostVector(images, cameras, p, plane_hypotheses[left_near], cost_array[4], params);
+        ComputeMultiViewCostVector(images, cameras, p,
+                                   plane_hypotheses[left_near], cost_array[4],
+                                   params);
     }
 
     // right_near
@@ -978,7 +1060,7 @@ __device__ void CheckerboardPropagation(const cudaTextureObject_t *images, const
                     costMinPoint = pointTemp;
                 }
             }
-            if (p.x < width - 2 - i && p.y < height - 1- i) {
+            if (p.x < width - 2 - i && p.y < height - 1 - i) {
                 int pointTemp = right_near + (1 + i) + i * width;
                 if (costs[pointTemp] < costMin) {
                     costMin = costs[pointTemp];
@@ -987,92 +1069,109 @@ __device__ void CheckerboardPropagation(const cudaTextureObject_t *images, const
             }
         }
         right_near = costMinPoint;
-        ComputeMultiViewCostVector(images, cameras, p, plane_hypotheses[right_near], cost_array[6], params);
+        ComputeMultiViewCostVector(images, cameras, p,
+                                   plane_hypotheses[right_near], cost_array[6],
+                                   params);
     }
-    const int positions[8] = {up_near, up_far, down_near, down_far, left_near, left_far, right_near, right_far};
+    const int positions[8] = {up_near, up_far, down_near, down_far, left_near,
+                              left_far, right_near, right_far};
 
     // Multi-hypothesis Joint View Selection
+    bool MultiHypothesis = true;
+
     float view_weights[32] = {0.0f};
     float view_selection_priors[32] = {0.0f};
-    int neighbor_positions[4] = {center - width, center + width, center - 1, center + 1};
-    for (int i = 0; i < 4; ++i) {
-        if (flag[2 * i]) {
-            for (int j = 0; j < params.num_images - 1; ++j) {
-                if (isSet(selected_views[neighbor_positions[i]], j) == 1) {
-                    view_selection_priors[j] += 0.9f;
-                } else {
-                    view_selection_priors[j] += 0.1f;
-                }
-            }
-        }
-    }
-
-    float sampling_probs[32] = {0.0f};
-    float cost_threshold = 0.8 * expf((iter) * (iter) / (-90.0f));
-    for (int i = 0; i < params.num_images - 1; i++) {
-        float count = 0;
-        int count_false = 0;
-        float tmpw = 0;
-        for (int j = 0; j < 8; j++) {
-            if (cost_array[j][i] < cost_threshold) {
-                tmpw += expf(cost_array[j][i] * cost_array[j][i] / (-0.18f));
-                count++;
-            }
-            if (cost_array[j][i] > 1.2f) {
-                count_false++;
-            }
-        }
-        if (count > 2 && count_false < 3) {
-            sampling_probs[i] = tmpw / count;
-        }
-        else if (count_false < 3) {
-            sampling_probs[i] = expf(cost_threshold * cost_threshold / (-0.32f));
-        }
-        sampling_probs[i] = sampling_probs[i] * view_selection_priors[i];
-    }
-
-    TransformPDFToCDF(sampling_probs, params.num_images - 1);
-    for (int sample = 0; sample < 15; ++sample) {
-        const float rand_prob = curand_uniform(&rand_states[center]) - FLT_EPSILON;
-
-        for (int image_id = 0; image_id < params.num_images - 1; ++image_id) {
-            const float prob = sampling_probs[image_id];
-            if (prob > rand_prob) {
-                view_weights[image_id] += 1.0f;
-                break;
-            }
-        }
-    }
-
-    unsigned int temp_selected_views = 0;
-    int num_selected_view = 0;
-    float weight_norm = 0;
-    for (int i = 0; i < params.num_images - 1; ++i) {
-        if (view_weights[i] > 0) {
-            setBit(temp_selected_views, i);
-            weight_norm += view_weights[i];
-            num_selected_view++;
-        }
-    }
-
     float final_costs[8] = {0.0f};
-    for (int i = 0; i < 8; ++i) {
-        for (int j = 0; j < params.num_images - 1; ++j) {
-            if (view_weights[j] > 0) {
-                if (params.geom_consistency) {
-                    if (flag[i]) {
-                        final_costs[i] += view_weights[j] * (cost_array[i][j] + 0.2f * ComputeGeomConsistencyCost(depths[j+1], cameras[0], cameras[j+1], plane_hypotheses[positions[i]], p));
+    float weight_norm = 0;
+    unsigned int temp_selected_views = 0;
+    if (MultiHypothesis){
+        int neighbor_positions[4] = {center - width, center + width, center - 1,
+                                     center + 1};
+        for (int i = 0; i < 4; ++i) {
+            if (flag[2 * i]) {
+                for (int j = 0; j < params.num_images - 1; ++j) {
+                    if (isSet(selected_views[neighbor_positions[i]], j) == 1) {
+                        view_selection_priors[j] += 0.9f;
+                    } else {
+                        view_selection_priors[j] += 0.1f;
                     }
-                    else {
-                        final_costs[i] += view_weights[j] * (cost_array[i][j] + 0.1f * 3.0f);
-                    }
-                }
-                else {
-                    final_costs[i] += view_weights[j] * cost_array[i][j];
                 }
             }
         }
-        final_costs[i] /= weight_norm;
+
+        float sampling_probs[32] = {0.0f};
+        float cost_threshold = 0.8 * expf((iter) * (iter) / (-90.0f));
+        for (int i = 0; i < params.num_images - 1; i++) {
+            float count = 0;
+            int count_false = 0;
+            float tmpw = 0;
+            for (int j = 0; j < 8; j++) {
+                if (cost_array[j][i] < cost_threshold) {
+                    tmpw += expf(cost_array[j][i] * cost_array[j][i] / (-0.18f));
+                    count++;
+                }
+                if (cost_array[j][i] > 1.2f) {
+                    count_false++;
+                }
+            }
+            if (count > 2 && count_false < 3) {
+                sampling_probs[i] = tmpw / count;
+            } else if (count_false < 3) {
+                sampling_probs[i] = expf(
+                        cost_threshold * cost_threshold / (-0.32f));
+            }
+            sampling_probs[i] = sampling_probs[i] * view_selection_priors[i];
+        }
+
+        TransformPDFToCDF(sampling_probs, params.num_images - 1);
+        for (int sample = 0; sample < 15; ++sample) {
+            const float rand_prob =
+                    curand_uniform(&rand_states[center]) - FLT_EPSILON;
+
+            for (int image_id = 0; image_id < params.num_images - 1; ++image_id) {
+                const float prob = sampling_probs[image_id];
+                if (prob > rand_prob) {
+                    view_weights[image_id] += 1.0f;
+                    break;
+                }
+            }
+        }
+
+        int num_selected_view = 0;
+        for (int i = 0; i < params.num_images - 1; ++i) {
+            if (view_weights[i] > 0) {
+                setBit(temp_selected_views, i);
+                weight_norm += view_weights[i];
+                num_selected_view++;
+            }
+        }
+
+        for (int i = 0; i < 8; ++i) {
+            for (int j = 0; j < params.num_images - 1; ++j) {
+                if (view_weights[j] > 0) {
+                    if (params.geom_consistency) {
+                        if (flag[i]) {
+                            final_costs[i] += view_weights[j] * (cost_array[i][j] +
+                                                                 0.2f *
+                                                                 ComputeGeomConsistencyCost(
+                                                                         depths[j +
+                                                                                1],
+                                                                         cameras[0],
+                                                                         cameras[j +
+                                                                                 1],
+                                                                         plane_hypotheses[positions[i]],
+                                                                         p));
+                        } else {
+                            final_costs[i] += view_weights[j] *
+                                              (cost_array[i][j] + 0.1f * 3.0f);
+                        }
+                    } else {
+                        final_costs[i] += view_weights[j] * cost_array[i][j];
+                    }
+                }
+            }
+            final_costs[i] /= weight_norm;
+        }
     }
 
     const int min_cost_idx = FindMinCostIndex(final_costs, 8);
@@ -1093,57 +1192,12 @@ __device__ void CheckerboardPropagation(const cudaTextureObject_t *images, const
     float depth_now = ComputeDepthfromPlaneHypothesis(cameras[0], plane_hypotheses[center], p);
     float restricted_cost = 0.0f;
     if (params.planar_prior) {
-        float restricted_final_costs[8] = {0.0f};
-        float gamma = 0.5f;
-        float depth_sigma = (params.depth_max - params.depth_min) / 64.0f;
-        float two_depth_sigma_squared = 2 * depth_sigma * depth_sigma;
-        float angle_sigma = M_PI * (5.0f / 180.0f);
-        float two_angle_sigma_squared = 2 * angle_sigma * angle_sigma;
-        float depth_prior = ComputeDepthfromPlaneHypothesis(cameras[0], prior_planes[center], p);
-        float beta = 0.18f;
-
-        if (plane_masks[center] > 0) {
-            for (int i = 0; i < 8; i++) {
-                if (flag[i]) {
-                    float depth_now = ComputeDepthfromPlaneHypothesis(cameras[0], plane_hypotheses[positions[i]], p);
-                    float depth_diff = depth_now - depth_prior;
-                    float angle_cos = Vec3DotVec3(prior_planes[center], plane_hypotheses[positions[i]]);
-                    float angle_diff = acos(angle_cos);
-                    float prior = gamma + exp(- depth_diff * depth_diff / two_depth_sigma_squared) * exp(- angle_diff * angle_diff / two_angle_sigma_squared);
-                    restricted_final_costs[i] = exp(-final_costs[i] * final_costs[i] / beta) * prior;
-                }
-            }
-            const int max_cost_idx = FindMaxCostIndex(restricted_final_costs, 8);
-
-            float restricted_cost_now = 0.0f;
-            float depth_now = ComputeDepthfromPlaneHypothesis(cameras[0], plane_hypotheses[center], p);
-            float depth_diff = depth_now - depth_prior;
-            float angle_cos = Vec3DotVec3(prior_planes[center], plane_hypotheses[center]);
-            float angle_diff = acos(angle_cos);
-            float prior = gamma + exp(- depth_diff * depth_diff / two_depth_sigma_squared) * exp(- angle_diff * angle_diff / two_angle_sigma_squared);
-            restricted_cost_now = exp(-cost_now * cost_now / beta) * prior;
-
-            if (flag[max_cost_idx]) {
-                float depth_before = ComputeDepthfromPlaneHypothesis(cameras[0], plane_hypotheses[positions[max_cost_idx]], p);
-
-                if (depth_before >= params.depth_min && depth_before <= params.depth_max && restricted_final_costs[max_cost_idx] > restricted_cost_now) {
-                    depth_now   = depth_before;
-                    plane_hypotheses[center] = plane_hypotheses[positions[max_cost_idx]];
-                    costs[center] = final_costs[max_cost_idx];
-                    restricted_cost = restricted_final_costs[max_cost_idx];
-                    selected_views[center] = temp_selected_views;
-                }
-            }
-        }
-        else if (flag[min_cost_idx]) {
-            float depth_before = ComputeDepthfromPlaneHypothesis(cameras[0], plane_hypotheses[positions[min_cost_idx]], p);
-
-            if (depth_before >= params.depth_min && depth_before <= params.depth_max && final_costs[min_cost_idx] < cost_now) {
-                depth_now = depth_before;
-                plane_hypotheses[center] = plane_hypotheses[positions[min_cost_idx]];
-                costs[center] = final_costs[min_cost_idx];
-            }
-        }
+        PlanarPriorCostAdjust(cameras, plane_hypotheses, costs, selected_views,
+                              prior_planes,
+                              plane_masks, p, params, center, flag, positions,
+                              temp_selected_views,
+                              final_costs, min_cost_idx, cost_now, depth_now,
+                              restricted_cost);
     }
 
     float4 plane_hypotheses_now;
@@ -1351,7 +1405,50 @@ __global__ void RedPixelFilter(const Camera *cameras, float4 *plane_hypotheses, 
     CheckerboardFilter(cameras, plane_hypotheses, costs, p);
 }
 
+void ACMMP::CrossPollinateCams(const int ref, const int src) {
 
+    <<<>>>CrossPollinateCams();
+
+}
+__global__ void CrossPollinateCuda(
+        PatchMatchParams params,
+        Camera ref_cam,
+        Camera alt_cam,
+        Camera * cameras,
+        float4 hypothesis,
+        cudaTextureObject_t *images
+        )
+{
+
+    //get the current index to run
+    int2 p = make_int2(
+            blockIdx.x * blockDim.x + threadIdx.x,
+            blockIdx.y * blockDim.y + threadIdx.y
+            );
+
+    // with this index, get the depth estimate
+    auto depth = ComputeDepthfromPlaneHypothesis(alt_cam, hypothesis, p);
+    float3 world_pt = Get3DPointonWorld_cu(p.x, p.y, depth, alt_cam);
+    float2 proj_p;
+    float temp_depth;
+    ProjectonCamera_cu(world_pt, ref_cam, proj_p, temp_depth);
+    // project this to the main cam
+
+    // compute the cost at this point
+    float cost_vector[MAX_IMAGES] = {0.f};
+
+    ComputeMultiViewCostVector(images,
+                               cameras,
+                               make_int2(proj_p.x, proj_p.y),
+                               hypothesis,
+                               cost_vector,
+                               params);
+    float best_cost = 0;
+    // if the cost is better
+
+    // atomic store the new plane definition and cost.
+
+};
 
 void visualise_cuda_data(float4 * cuda_data, Camera cam, int waitKey = -1,
                          std::string imname = "image"){
@@ -1374,6 +1471,7 @@ void visualise_cuda_data(float4 * cuda_data, Camera cam, int waitKey = -1,
     cv::imshow(imname, disp);
     cv::waitKey(waitKey);
 }
+
 
 void ACMMP::RunPatchMatch()
 {
