@@ -1405,51 +1405,6 @@ __global__ void RedPixelFilter(const Camera *cameras, float4 *plane_hypotheses, 
     CheckerboardFilter(cameras, plane_hypotheses, costs, p);
 }
 
-void ACMMP::CrossPollinateCams(const int ref, const int src) {
-
-    <<<>>>CrossPollinateCams();
-
-}
-__global__ void CrossPollinateCuda(
-        PatchMatchParams params,
-        Camera ref_cam,
-        Camera alt_cam,
-        Camera * cameras,
-        float4 hypothesis,
-        cudaTextureObject_t *images
-        )
-{
-
-    //get the current index to run
-    int2 p = make_int2(
-            blockIdx.x * blockDim.x + threadIdx.x,
-            blockIdx.y * blockDim.y + threadIdx.y
-            );
-
-    // with this index, get the depth estimate
-    auto depth = ComputeDepthfromPlaneHypothesis(alt_cam, hypothesis, p);
-    float3 world_pt = Get3DPointonWorld_cu(p.x, p.y, depth, alt_cam);
-    float2 proj_p;
-    float temp_depth;
-    ProjectonCamera_cu(world_pt, ref_cam, proj_p, temp_depth);
-    // project this to the main cam
-
-    // compute the cost at this point
-    float cost_vector[MAX_IMAGES] = {0.f};
-
-    ComputeMultiViewCostVector(images,
-                               cameras,
-                               make_int2(proj_p.x, proj_p.y),
-                               hypothesis,
-                               cost_vector,
-                               params);
-    float best_cost = 0;
-    // if the cost is better
-
-    // atomic store the new plane definition and cost.
-
-};
-
 void visualise_cuda_data(float4 * cuda_data, Camera cam, int waitKey = -1,
                          std::string imname = "image"){
     int rows = cam.height, cols = cam.width;

@@ -78,9 +78,6 @@ public:
     int GetReferenceImageHeight();
     cv::Mat GetReferenceImage();
     float4 GetPlaneHypothesis(const int index);
-
-    void CrossPollinateCams(const int ref, const int src);
-
     Camera GetCamera(const int index);
 
     float GetCost(const int index);

@@ -171,16 +171,7 @@ int main(int argc, char** argv)
                             problems, i, geom_consistency,
                             planar_prior, hierarchy, multi_geometry);
                 }
-                cross_camera_pollination = true;
 
-                for (size_t i = 0; i < num_images; ++i) {
-                    ProcessProblem(
-                            sample_handler,
-                            output_folder, dense_folder,
-                            problems, i, geom_consistency,
-                            planar_prior, hierarchy, multi_geometry);
-                }
-                cross_camera_pollination = false;
             }
         }
         max_num_downscale--;

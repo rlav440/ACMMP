@@ -240,7 +240,7 @@ void ProcessProblem(pSampler &pSample, const std::string output_folder,
                     const std::string &dense_folder,
                     const std::vector<Problem> &problems, const int idx,
                     bool geom_consistency, bool planar_prior, bool hierarchy,
-                    bool multi_geometry, bool cross_pollinated, bool seeded) {
+                    bool multi_geometry, bool seeded) {
   const Problem &problem = problems[idx];
   std::cout << "Processing image " << std::setw(8) << std::setfill('0')
             << problem.ref_image_id << "..." << std::endl;
@@ -272,19 +272,6 @@ void ProcessProblem(pSampler &pSample, const std::string output_folder,
     acmmp.SetPlanarPrior(pSample.GetPriorPlaneEstimate(
         idx, acmmp.GetCamera(idx), height, width));
   }
-
-  if (cross_pollinated){
-    //get the number of cameras
-    // for every pixel of the other camera -> test that pixel getting pushed
-    // what to do about two threads pushing to the same pixel
-    int n_images = problem.src_image_ids.size();
-    for (int idcam = 0; idcam < n_images; idcam++){
-        if (idcam == idx)
-            continue;
-        acmmp.CrossPollinateCams(idcam, idx);
-    }
-
-  };
 
   acmmp.RunPatchMatch();
 
