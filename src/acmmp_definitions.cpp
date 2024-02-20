@@ -273,7 +273,7 @@ void ProcessProblem(pSampler &pSample, const std::string output_folder,
         idx, acmmp.GetCamera(idx), height, width));
   }
 
-  acmmp.RunPatchMatch();
+  acmmp.RunPatchMatch(problem.ref_image_id);
 
   cv::Mat_<float> depths = cv::Mat::zeros(height, width, CV_32FC1);
   cv::Mat_<cv::Vec3f> normals = cv::Mat::zeros(height, width, CV_32FC3);

@@ -68,7 +68,7 @@ public:
     void Colmap2MVS(const std::string &dense_folder,
                     std::vector<Problem> &problems);
     void CudaSpaceInitialization(const std::string &output_folder, const Problem &problem);
-    void RunPatchMatch();
+    void RunPatchMatch(int cam_num = 0);
     void SetGeomConsistencyParams(bool multi_geometry);
     void SetPlanarPriorParams();
     void SetHierarchyParams();
